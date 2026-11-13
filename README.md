@@ -11,6 +11,8 @@ portuguesa do [M3UPT](https://github.com/LITUATUI/M3UPT) como categoria fixa.
 - **Descobrir** — prateleiras editoriais do catálogo público.
 - **Catálogo A–Z** — filmes e séries por letra, com capas carregadas em
   segundo plano.
+- **Listas M3U do utilizador** — cada lista que acrescentares em Ajustes entra
+  na grelha como mais um grupo, ao lado da tua e dos Canais de Portugal.
 - **Favoritos, Busca, Guia de TV e Ajustes** — lista M3U configurável, EPG
   XMLTV, agente HTTP e diagnóstico.
 - **Canais de Portugal** — 432 canais do M3UPT, ao lado da sua lista.

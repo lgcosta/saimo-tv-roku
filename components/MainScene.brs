@@ -17,7 +17,6 @@ sub init()
     m.vodGrid = m.top.findNode("vodGrid")
     m.channelGrid = m.top.findNode("channelGrid")
     m.previewVideo = m.top.findNode("previewVideo")
-    m.previewFrame = m.top.findNode("previewFrame")
     m.previewLabels = m.top.findNode("previewLabels")
     m.previewTitle = m.top.findNode("previewTitle")
     m.previewState = m.top.findNode("previewState")
@@ -103,6 +102,13 @@ sub init()
 
     m.channels = []
     m.mainChannels = []
+    ' Listas M3U externas adicionadas pelo utilizador.
+    m.extraPlaylists = []
+    m.extraChannels = []
+    m.extraPending = false
+    m.extraIndex = 0
+    m.extraQueue = []
+    m.extraEditIndex = -1
     m.portugalChannels = []
     m.portugalLastSync = Val(readSetting("portugalLastSync"))
     m.portugalInitPending = false
@@ -143,6 +149,7 @@ sub init()
     m.vodInitPending = false
     m.vodLastSync = Val(readSetting("vodLastSync"))
     m.playlistLastSync = Val(readSetting("playlistLastSync"))
+    m.extraPlaylists = loadExtraPlaylists()
     m.playlistNotify = false
     m.saimoIndexLetters = []
     m.saimoBases = {}
@@ -431,6 +438,10 @@ function isSyncStale(lastSync as integer) as boolean
 end function
 
 function playlistIsStale() as boolean
+    ' O cache em cachefs e apagado quando a app e reinstalada, mas o
+    ' registry sobrevive. Sem esta guarda a app achava que estava em dia e
+    ' ficava com a grelha vazia ate passarem as 6 horas.
+    if m.mainChannels.Count() = 0 then return true
     return isSyncStale(m.playlistLastSync)
 end function
 
@@ -519,6 +530,11 @@ sub clearCache()
     m.playlistLastSync = 0
     m.portugalLastSync = 0
     m.portugalChannels = []
+    for i = 0 to m.extraPlaylists.Count() - 1
+        m.extraPlaylists[i].lastSync = 0
+        m.extraPlaylists[i].error = ""
+    end for
+    m.extraChannels = []
     writeSetting("vodLastSync", "0")
     writeSetting("playlistLastSync", "0")
     writeSetting("portugalLastSync", "0")
@@ -605,21 +621,41 @@ sub runScheduledSync()
     if m.fetchTask <> invalid then return
     needPlaylist = m.playlistUrl <> "" and playlistIsStale()
     needPortugal = portugalIsStale()
+    needExtras = extrasAreStale()
     needVod = m.vodUrl <> "" and vodIsStale()
     if needPlaylist then
         if needPortugal then m.portugalInitPending = true
+        if needExtras then queueStaleExtras()
         if needVod then m.vodInitPending = true
         refreshPlaylist(false)
     else if needPortugal then
+        if needExtras then queueStaleExtras()
         if needVod then m.vodInitPending = true
         refreshPortugal(false)
+    else if needExtras then
+        if needVod then m.vodInitPending = true
+        queueStaleExtras()
+        startNextExtra()
     else if needVod then
         refreshVodCatalog(false)
     end if
 end sub
 
 function portugalIsStale() as boolean
+    if m.portugalChannels.Count() = 0 then return true
     return isSyncStale(m.portugalLastSync)
+end function
+
+function extrasAreStale() as boolean
+    for each entry in m.extraPlaylists
+        if entry.enabled then
+            if isSyncStale(entry.lastSync) then return true
+        end if
+    end for
+    ' As listas externas nao tem cache em ficheiro: se ha listas guardadas
+    ' mas nenhum canal delas carregado, e preciso voltar a descarregar.
+    if m.extraPlaylists.Count() > 0 and m.extraChannels.Count() = 0 then return true
+    return false
 end function
 
 sub onVodRefreshTimer()
@@ -660,6 +696,8 @@ sub onFetchState()
         handlePlaylistResult(task)
     else if kind = "m3upt" then
         handlePortugalResult(task)
+    else if kind = "extra_playlist" then
+        handleExtraPlaylistResult(task)
     else if kind = "vod_catalog" then
         handleVodCatalogResult(task)
     else if kind = "saimo_index" then
@@ -699,15 +737,16 @@ sub onFetchState()
 
     ' A atualizacao segue a ordem: lista principal, Portugal, catalogo VOD.
     ' Cada etapa espera pela anterior porque so corre uma tarefa de cada vez.
-    if kind = "playlist" and m.portugalInitPending then
-        m.portugalInitPending = false
-        refreshPortugal(false)
-    else if kind = "m3upt" and m.vodInitPending then
-        m.vodInitPending = false
-        if m.vodUrl <> "" then refreshVodCatalog(false)
-    else if kind = "playlist" and m.vodInitPending then
-        m.vodInitPending = false
-        if m.vodUrl <> "" then refreshVodCatalog(false)
+    if m.fetchTask = invalid then
+        if m.portugalInitPending then
+            m.portugalInitPending = false
+            refreshPortugal(false)
+        else if m.extraPending and m.extraQueue.Count() > 0 then
+            startNextExtra()
+        else if m.vodInitPending then
+            m.vodInitPending = false
+            if m.vodUrl <> "" then refreshVodCatalog(false)
+        end if
     end if
 end sub
 
@@ -778,6 +817,234 @@ sub handlePlaylistResult(task as object)
     if m.epgUrl <> "" and not m.epgLoaded then loadEpg()
 end sub
 
+' ---------------------------------------------------------------------------
+' Listas M3U externas
+'
+' O utilizador pode acrescentar listas M3U de canais. Cada lista entra como
+' um grupo proprio na grelhe, ao lado da lista principal e dos Canais de
+' Portugal. Ficam guardadas no registry; so aparecem na grelhe se forem
+' descarregadas com exito.
+' ---------------------------------------------------------------------------
+
+function loadExtraPlaylists() as object
+    raw = readSetting("extraPlaylists")
+    if not isStringValue(raw) or raw = "" then return []
+    parsed = ParseJson(raw)
+    if type(parsed) <> "roArray" then return []
+    lists = []
+    for each item in parsed
+        if type(item) = "roAssociativeArray" then
+            name = strField(item, "name")
+            url = strField(item, "url")
+            ' BrightScript nao tem "continue": o corpo so corre se o url existir.
+            if url <> "" then
+                if name = "" then name = extraPlaylistNameFromUrl(url)
+                lists.Push({
+                    name: name
+                    url: url
+                    enabled: boolField(item, "enabled", true)
+                    lastSync: Val(strField(item, "lastSync"))
+                    count: Val(strField(item, "count"))
+                    error: strField(item, "error")
+                })
+            end if
+        end if
+    end for
+    return lists
+end function
+
+sub saveExtraPlaylists()
+    WriteAsciiFile("cachefs:/saimo_extra_playlists.json", FormatJson(m.extraPlaylists))
+    writeSetting("extraPlaylists", FormatJson(m.extraPlaylists))
+end sub
+
+function extraPlaylistNameFromUrl(url as string) as string
+    ' O nome da lista vem do dominio do endereco; se nao der, usa o fim.
+    clean = url.Trim()
+    if Left(LCase(clean), 7) = "http://" then clean = Mid(clean, 8)
+    if Left(LCase(clean), 8) = "https://" then clean = Mid(clean, 9)
+    slash = Instr(1, clean, "/")
+    if slash > 1 then clean = Left(clean, slash - 1)
+    if clean = "" then clean = "Lista M3U"
+    return clean
+end function
+
+sub addExtraPlaylist(url as string)
+    url = url.Trim()
+    if url = "" then return
+    if not (Left(LCase(url), 7) = "http://" or Left(LCase(url), 8) = "https://") then
+        showToastType("O endereco tem de comecar por http:// ou https://.", "error")
+        return
+    end if
+    for each existing in m.extraPlaylists
+        if LCase(existing.url) = LCase(url) then
+            showToastType("Essa lista ja esta configurada.", "error")
+            return
+        end if
+    end for
+    print "SAIMO_EXTRA adicionar " + url
+    name = extraPlaylistNameFromUrl(url)
+    suffix = 2
+    taken = true
+    while taken
+        taken = false
+        for each existing in m.extraPlaylists
+            if existing.name = name then taken = true
+        end for
+        if taken then
+            name = extraPlaylistNameFromUrl(url) + " " + Str(suffix).Trim()
+            suffix = suffix + 1
+        end if
+    end while
+    m.extraPlaylists.Push({ name: name, url: url, enabled: true, lastSync: 0, count: 0, error: "" })
+    saveExtraPlaylists()
+    ' Descarrega ja para confirmar que funciona antes de a mostrar.
+    if m.fetchTask <> invalid then
+        m.extraQueue.Push(m.extraPlaylists.Count() - 1)
+        m.extraPending = true
+        showToast("A carregar a nova lista...")
+    else
+        m.extraQueue = [m.extraPlaylists.Count() - 1]
+        startNextExtra()
+    end if
+end sub
+
+sub removeExtraPlaylist(index as integer)
+    if index < 0 or index >= m.extraPlaylists.Count() then return
+    removedName = m.extraPlaylists[index].name
+    m.extraPlaylists.Delete(index)
+    ' Os indices da fila reorganizam-se: o que estava depois do removido
+    ' passa a estar uma posicao antes.
+    remaining = []
+    for each idx in m.extraQueue
+        if idx > index then
+            remaining.Push(idx - 1)
+        else if idx <> index then
+            remaining.Push(idx)
+        end if
+    end for
+    m.extraQueue = remaining
+    saveExtraPlaylists()
+    print "SAIMO_EXTRA removida " + removedName
+    applyExtraChannels()
+    showToastType("Lista removida.", "success")
+end sub
+
+' Coloca na fila as listas extra que precisam de ser actualizadas.
+sub queueStaleExtras()
+    m.extraQueue = []
+    for i = 0 to m.extraPlaylists.Count() - 1
+        if m.extraPlaylists[i].enabled and isSyncStale(m.extraPlaylists[i].lastSync) then
+            m.extraQueue.Push(i)
+        end if
+    end for
+    ' Sem esta flag a cadeia de actualizacao nunca arranca a fila.
+    m.extraPending = m.extraQueue.Count() > 0
+end sub
+
+' Arranca a proxima lista extra da fila. Quando a fila esgota, a fase extra
+' termina e a cadeia de actualizacao continua para o catalogo VOD.
+sub startNextExtra()
+    if m.fetchTask <> invalid then
+        ' Ha outra tarefa em curso: a fila espera por ela.
+        m.extraPending = true
+        return
+    end if
+    for i = 0 to m.extraQueue.Count() - 1
+        idx = m.extraQueue[i]
+        if idx >= 0 and idx < m.extraPlaylists.Count() and m.extraPlaylists[idx].enabled then
+            m.extraIndex = idx
+            m.extraQueue.Delete(i)
+            m.extraPending = true
+            refreshExtraPlaylist(false)
+            return
+        end if
+    end for
+    m.extraPending = false
+end sub
+
+sub refreshExtraPlaylist(notify as boolean)
+    if m.fetchTask <> invalid then return
+    if m.extraIndex < 0 or m.extraIndex >= m.extraPlaylists.Count() then return
+    entry = m.extraPlaylists[m.extraIndex]
+    if not entry.enabled then return
+    if not startFetch("extra_playlist", entry.url, "", "", "", "") then return
+    m.status.text = "A carregar " + entry.name + "..."
+    if notify then showToast("A carregar " + entry.name + "...")
+end sub
+
+sub handleExtraPlaylistResult(task as object)
+    index = m.extraIndex
+    if index < 0 or index >= m.extraPlaylists.Count() then return
+    entry = m.extraPlaylists[index]
+    if saimoBaseUrl(strField(task, "baseUrl")) <> saimoBaseUrl(m.vodUrl) and strField(task, "url").Trim() <> entry.url then return
+
+    if task.success <> true then
+        entry.error = strField(task, "error")
+        if entry.error = "" then entry.error = "Nao foi possivel descarregar a lista."
+        m.extraPlaylists[index] = entry
+        saveExtraPlaylists()
+        m.status.text = entry.name + ": " + entry.error
+        print "SAIMO_EXTRA erro " + entry.error
+        applyExtraChannels()
+        startNextExtra()
+        return
+    end if
+
+    channels = ParseJson(task.resultJson)
+    if type(channels) <> "roArray" or channels.Count() = 0 then
+        entry.error = "A lista foi descarregada mas nao tem canais validos."
+        m.extraPlaylists[index] = entry
+        saveExtraPlaylists()
+        m.status.text = entry.name + ": " + entry.error
+        print "SAIMO_EXTRA erro " + entry.error
+        applyExtraChannels()
+        startNextExtra()
+        return
+    end if
+
+    entry.count = channels.Count()
+    entry.error = ""
+    clock = CreateObject("roDateTime")
+    entry.lastSync = clock.AsSeconds()
+    m.extraPlaylists[index] = entry
+    saveExtraPlaylists()
+
+    print "SAIMO_EXTRA ok count=" + Str(channels.Count()).Trim() + " url=" + entry.url
+    m.extraChannels = []
+    for each raw in channels
+        ch = normalizeChannel(raw)
+        if ch <> invalid then
+            ch.group = entry.name
+            m.extraChannels.Push(ch)
+        end if
+    end for
+    applyExtraChannels()
+    m.status.text = entry.name + ": " + Str(entry.count).Trim() + " canais."
+    showToastType(entry.name + ": " + Str(entry.count).Trim() + " canais.", "success")
+    startNextExtra()
+end sub
+
+sub applyExtraChannels()
+    m.channels = []
+    for each ch in m.mainChannels
+        m.channels.Push(ch)
+    end for
+    for each ch in m.portugalChannels
+        m.channels.Push(ch)
+    end for
+    for each ch in m.extraChannels
+        m.channels.Push(ch)
+    end for
+    buildGroups()
+    if m.selectedGroup <> "" and findGroup(m.selectedGroup) = invalid then m.selectedGroup = ""
+    buildNav(true)
+    if m.activeView = "channels" then
+        m.searchActive = false
+        populateChannels(m.selectedGroup, false)
+    end if
+    updateChannelStatus()
+end sub
 sub applyChannels(rawChannels as object, forceFocus as boolean)
     normalized = []
     for each raw in rawChannels
@@ -791,7 +1058,7 @@ sub applyChannels(rawChannels as object, forceFocus as boolean)
 
     wasChannels = m.activeView = "channels"
     m.mainChannels = normalized
-    mergeChannels()
+    applyExtraChannels()
     buildGroups()
     if m.selectedGroup <> "" and findGroup(m.selectedGroup) = invalid then m.selectedGroup = ""
     buildNav(true)
@@ -1176,12 +1443,15 @@ sub buildChannelGrid()
                 progressText = Str(percent).Trim() + "%"
             end if
         end if
-        item.shortDescriptionLine3 = programmeText
         if progressText <> "" then
             if programmeText <> "" then programmeText = programmeText + "  •  "
             programmeText = programmeText + progressText
         end if
-        item.shortDescriptionLine4 = programmeText
+        ' O ContentNode deste firmware so aceita um conjunto fixo de campos:
+        ' "shortDescriptionLine3/4" e "shortDescription" nao existem, e campos
+        ' com nome proprio tambem nao. "description" e aceite e nao e usado
+        ' por mais nada, por isso e ai que vai o programa em andamento.
+        item.description = programmeText
     end for
 
     m.channelGrid.content = root
@@ -1350,7 +1620,6 @@ sub startPreview(channel as object)
     m.previewSourceIndex = 0
     m.previewFailed = false
     m.previewActive = true
-    if m.previewFrame <> invalid then m.previewFrame.visible = true
     if m.previewLabels <> invalid then m.previewLabels.visible = true
     if m.previewTitle <> invalid then m.previewTitle.text = channel.title
     if m.previewState <> invalid then m.previewState.text = "A ligar..."
@@ -1407,7 +1676,6 @@ sub stopPreview()
         m.previewVideo.visible = false
         m.previewVideo.content = invalid
     end if
-    if m.previewFrame <> invalid then m.previewFrame.visible = false
     if m.previewLabels <> invalid then m.previewLabels.visible = false
 end sub
 
@@ -2480,10 +2748,9 @@ sub openSearchDialog()
     dialog.buttons = ["Buscar", "Cancelar"]
     dialog.text = ""
     dialog.observeField("buttonSelected", "onSearchButtonSelected")
-    m.dialog = dialog
+    dialog.observeField("wasClosed", "onDialogClosed")
     m.editKey = "search"
-    m.top.appendChild(dialog)
-    dialog.setFocus(true)
+    showModalDialog(dialog)
 end sub
 
 sub onSearchButtonSelected()
@@ -2868,6 +3135,19 @@ end sub
 sub buildSettings()
     entries = []
     entries.Push({ title: "URL da lista M3U de canais", key: "playlist", help: "Lista de canais ao vivo. Este endereço é independente do catálogo VOD." })
+    entries.Push({ title: "Adicionar lista M3U", key: "addPlaylist", help: "Acrescenta uma lista M3U de canais ao app. A lista entra como um grupo próprio na grelha, ao lado da sua lista principal e dos Canais de Portugal. Só fica visível se for descarregada com êxito." })
+    for i = 0 to m.extraPlaylists.Count() - 1
+        entry = m.extraPlaylists[i]
+        status = "desactivada"
+        if entry.enabled then
+            if entry.error <> "" then
+                status = "sem resposta: " + entry.error
+            else
+                status = Str(entry.count).Trim() + " canais"
+            end if
+        end if
+        entries.Push({ title: entry.name, key: "extraPlaylist", index: i, help: "Lista M3U externa." + Chr(10) + "Endereço: " + entry.url + Chr(10) + "Estado: " + status })
+    end for
     entries.Push({ title: "Canais de Portugal (M3UPT)", key: "portugal", help: "Lista fixa que entra no app ao lado da sua: TV, rádios e beachcams portugueses, com os cabeçalhos que cada emissor exige. Não substitui a sua lista." })
     entries.Push({ title: "Fonte do catálogo de filmes e séries", key: "vod", help: "Padrão: catálogo Saimo, dividido por letras e atualizado pela rede. Também aceita uma URL de lista M3U/M3U8 autorizada. Endereço: https://saimo-filmes.pages.dev/" })
     entries.Push({ title: "Atualizar catálogo VOD agora", key: "vodrefresh", help: "Sincroniza filmes e séries imediatamente. Em segundo plano, o app verifica a cada 15 minutos e baixa quando o cache tem mais de 6 horas." })
@@ -2897,6 +3177,22 @@ function settingsHelpText(entry as object) as string
     if entry.key = "playlist" then
         text = text + Chr(10) + Chr(10) + "Atual: " + valueOrEmpty(m.playlistUrl)
         text = text + Chr(10) + "Estado: " + playlistSyncLabel()
+    else if entry.key = "addPlaylist" then
+        text = text + Chr(10) + Chr(10) + "Listas configuradas: " + Str(m.extraPlaylists.Count()).Trim()
+    else if entry.key = "extraPlaylist" then
+        index = Val(strField(entry, "index"))
+        if index >= 0 and index < m.extraPlaylists.Count() then
+            item = m.extraPlaylists[index]
+            text = text + Chr(10) + Chr(10) + "Endereço: " + item.url
+            if item.enabled then
+                text = text + Chr(10) + "Estado: activada"
+            else
+                text = text + Chr(10) + "Estado: desactivada"
+            end if
+            if item.error <> "" then text = text + Chr(10) + "Erro: " + item.error
+            if item.lastSync > 0 then text = text + Chr(10) + "Actualizado há " + relativeAge(item.lastSync)
+            text = text + Chr(10) + "Canais: " + Str(item.count).Trim()
+        end if
     else if entry.key = "portugal" then
         text = text + Chr(10) + Chr(10) + "Endereço: " + m3uptPlaylistUrl()
         text = text + Chr(10) + "Canais: " + Str(m.portugalChannels.Count()).Trim()
@@ -2940,9 +3236,14 @@ sub onSettingsSelected()
     index = m.settingsList.itemSelected
     if index < 0 or index >= m.settingsEntries.Count() then return
     key = m.settingsEntries[index].key
+    print "SAIMO_AJUSTES " + key
 
     if key = "playlist" then
         editSetting("playlist", "URL da lista M3U de canais", m.playlistUrl)
+    else if key = "addPlaylist" then
+        editSetting("addPlaylist", "Endereço da nova lista M3U", "")
+    else if key = "extraPlaylist" then
+        editExtraPlaylist(Val(strField(m.settingsEntries[index], "index")))
     else if key = "portugal" then
         closeSettings()
         m.portugalInitPending = false
@@ -2980,17 +3281,61 @@ sub onSettingsSelected()
     end if
 end sub
 
+sub editExtraPlaylist(index as integer)
+    if index < 0 or index >= m.extraPlaylists.Count() then return
+    entry = m.extraPlaylists[index]
+    dialog = CreateObject("roSGNode", "KeyboardDialog")
+    dialog.title = entry.name
+    dialog.buttons = ["Actualizar", "Remover", "Cancelar"]
+    dialog.text = entry.url
+    dialog.observeField("buttonSelected", "onExtraPlaylistButton")
+    dialog.observeField("wasClosed", "onDialogClosed")
+    m.editDialog = dialog
+    m.extraEditIndex = index
+    showModalDialog(dialog)
+end sub
+
+sub onExtraPlaylistButton()
+    if m.editDialog = invalid then return
+    button = m.editDialog.buttonSelected
+    value = m.editDialog.text
+    if value = invalid then value = ""
+    index = m.extraEditIndex
+    closeDialog()
+    if index < 0 or index >= m.extraPlaylists.Count() then return
+    if button = 0 then
+        ' Actualizar o endereco
+        if value.Trim() <> "" then
+            m.extraPlaylists[index].url = value.Trim()
+            m.extraPlaylists[index].error = ""
+            m.extraPlaylists[index].lastSync = 0
+            saveExtraPlaylists()
+            m.extraIndex = index
+            refreshExtraPlaylist(false)
+        end if
+    else if button = 1 then
+        removeExtraPlaylist(index)
+    end if
+end sub
+
+' Um Dialog so e modal (e so recebe o foco das teclas) quando e atribuido
+' ao campo "dialog" da cena. Acrescentar o no como filho da cena deixa o
+' foco no componente de tras e o teclado nunca chega ao dialogo.
+sub showModalDialog(dialog as object)
+    m.dialog = dialog
+    m.top.dialog = dialog
+end sub
+
 sub editSetting(key as string, title as string, initial as string)
     dialog = CreateObject("roSGNode", "KeyboardDialog")
     dialog.title = title
     dialog.buttons = ["Salvar", "Cancelar"]
     dialog.text = initial
     dialog.observeField("buttonSelected", "onEditSettingButton")
-    m.dialog = dialog
+    dialog.observeField("wasClosed", "onDialogClosed")
     m.editDialog = dialog
     m.editKey = key
-    m.top.appendChild(dialog)
-    dialog.setFocus(true)
+    showModalDialog(dialog)
 end sub
 
 sub onEditSettingButton()
@@ -3002,7 +3347,13 @@ sub onEditSettingButton()
     closeDialog()
     if index <> 0 then return
 
-    if key = "playlist" then
+    if key = "addPlaylist" then
+        addExtraPlaylist(value)
+        if m.settingsVisible then
+            buildSettings()
+            m.settingsList.setFocus(true)
+        end if
+    else if key = "playlist" then
         m.playlistUrl = value.Trim()
         writeSetting("playlistUrl", m.playlistUrl)
         closeSettings()
@@ -3062,10 +3413,24 @@ end sub
 sub closeDialog()
     if m.dialog <> invalid then
         dialog = m.dialog
-        m.dialog = invalid
-        if dialog.getParent() <> invalid then m.top.removeChild(dialog)
+        m.top.dialog = invalid
+        dialog.close = true
     end if
+    m.dialog = invalid
     m.editDialog = invalid
+    restoreFocusAfterDialog()
+end sub
+
+' O sistema fecha o dialogo sozinho quando se prime Back ou Home. A app
+' tem de mudar de estado tambem, senao fica a achar que ha dialogo aberto.
+sub onDialogClosed()
+    if m.dialog = invalid then return
+    m.dialog = invalid
+    m.editDialog = invalid
+    restoreFocusAfterDialog()
+end sub
+
+sub restoreFocusAfterDialog()
     if m.settingsVisible then
         m.settingsList.setFocus(true)
     else if m.activeView = "vod" or m.activeView = "vod_episodes" or m.activeView = "saimo_home" or m.activeView = "saimo_catalog" or m.activeView = "saimo_episodes" or m.activeView = "saimo_episodes_loading" then
@@ -3221,11 +3586,12 @@ sub openAbout()
     m.aboutVisible = true
     m.aboutGroup.visible = true
     m.homeGroup.visible = false
-    text = "Saimo TV 2.5.44 - cliente pessoal não oficial para Roku." + Chr(10) + Chr(10)
+    text = "Saimo TV 2.6.0 - cliente pessoal não oficial para Roku." + Chr(10) + Chr(10)
     text = text + "Este aplicativo não é afiliado à Saimo. Ele lê listas M3U e o catálogo público que você configura. Use somente fontes de conteúdo que você tenha permissão para acessar e distribuir." + Chr(10) + Chr(10)
-    text = text + "Interface 2.5.44: capas do catálogo são associadas mesmo com variações de pontuação, acentos e ano." + Chr(10) + Chr(10)
+    text = text + "Interface 2.6.0: você pode acrescentar as suas próprias listas M3U, em Ajustes, e cada uma entra na grelha como um grupo próprio." + Chr(10) + Chr(10)
     text = text + "Canais de Portugal: a lista pública do M3UPT (https://m3upt.com/iptv) entra como categoria fixa, ao lado da lista que você configura. Traz TV, rádios e beachcams portugueses, com os cabeçalhos HTTP que cada emissor exige. Canais com DRM ClearKey e conteúdo sob demanda ficam de fora, porque o Roku não os reproduz." + Chr(10) + Chr(10)
     text = text + "O EPG do M3UPT (https://m3upt.com/epg) vem comprimido em gzip e o Roku não sabe descomprimir, por isso o guia fica vazio até você indicar um XMLTV em texto puro em Ajustes." + Chr(10) + Chr(10)
+    text = text + "Listas M3U externas: em Ajustes, “Adicionar lista M3U” guarda o endereço e mostra a lista como mais um grupo na grelha, ao lado da sua lista principal e dos Canais de Portugal. Se uma lista deixar de responder, o grupo desaparece em vez de ficar a mostrar canais velhos." + Chr(10) + Chr(10)
     text = text + "Recursos: canais por grupo, múltiplas fontes com failover, favoritos, busca com acentos, catálogo VOD em grade de pôsteres, filmes, séries e episódios, capas carregadas em segundo plano, cache por letra e sincronização automática (verificação a cada 15 minutos; download quando o cache passa de 6 horas)." + Chr(10) + Chr(10)
     text = text + "Ao vivo não pausa nem busca, como em qualquer transmissão em tempo real. Filmes e séries mantêm pausa e busca." + Chr(10) + Chr(10)
     text = text + "Limitações: alguns streams usam formatos ou proteções que o Roku não reproduz. Não há DRM, ClearKey, telemetria, atualizador do APK ou Saimo Connect." + Chr(10) + Chr(10)
@@ -3272,7 +3638,6 @@ sub playChannel(channel as object, startIndex as integer)
     ' ocupar o ecra todo.
     m.video.mute = false
     ' Em ecra inteiro a moldura da preview desaparece.
-    if m.previewFrame <> invalid then m.previewFrame.visible = false
     if m.previewLabels <> invalid then m.previewLabels.visible = false
     m.playerAutoHideTimer.control = "stop"
     m.playerOverlay.visible = true

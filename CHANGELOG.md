@@ -6,6 +6,41 @@ o versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
 
 ## [Não publicado]
 
+## [2.6.0] — 2026-11-13
+
+### Adicionado
+- **Listas M3U do utilizador**: em *Ajustes → Adicionar lista M3U* guarda-se o
+  endereço de uma lista, que passa a aparecer na grelha de canais como mais um
+  grupo, ao lado da lista principal e dos Canais de Portugal. Cada lista tem
+  *Actualizar*, *Remover* e *Cancelar*; se deixar de responder, o grupo
+  desaparece em vez de ficar a mostrar canais velhos. Ficam guardadas no
+  registry e são sincronizadas em fila (lista principal → Portugal → listas
+  externas → catálogo VOD).
+- A preview do canal em foco foi redimensionada e reposicionada (240 × 135 px,
+  no canto inferior direito, por baixo da grelha), para deixar de cobrir os
+  cartões de canal.
+
+### Corrigido
+- **App vazia depois de uma actualização**: o cache em `cachefs` é apagado
+  quando a app é reinstalada, mas o registry sobrevive. A app via "sincronizado
+  há pouco" e não voltava a descarregar nada, pelo que a grelha ficava a vazia
+  até passarem as seis horas. Passa a sincronizar sempre que não há canais em
+  cache.
+- **Os diálogos não recebiam as teclas**: o `KeyboardDialog` era acrescentado
+  como filho da cena (`appendChild`), o que não o torna modal — o foco ficava
+  na lista de ajustes e as letras faziam pesquisa por inicial. Passa a ser
+  atribuído ao campo `dialog` da cena, como manda a documentação da Roku, e a
+  app acompanha o fecho automático com Back ou Home. Afectava a busca e todos
+  os campos de texto dos Ajustes (URL da lista, fonte do catálogo, EPG e
+  agente HTTP).
+- **O programa em directo e o progresso nunca apareciam no cartão do canal**:
+  `shortDescriptionLine3`, `shortDescriptionLine4` e `shortDescription` não
+  existem no `ContentNode` deste firmware, que também não aceita campos com
+  nome próprio. O programa passou a ir no campo standard `description`.
+- **`Remove()` não existe no `roArray`**: a API é `Delete(index)`. Remover uma
+  lista externa rebentava com um erro de runtime.
+- A consola deixa de mostrar um aviso por canal sobre o campo inexistente.
+
 ## [2.5.44] — 2026-11-13
 
 ### Adicionado

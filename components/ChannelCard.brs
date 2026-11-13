@@ -16,7 +16,7 @@ sub showItem()
     m.title.text = strField(item, "shortDescriptionLine1")
     if m.title.text = "" then m.title.text = strField(item, "title")
     m.meta.text = strField(item, "shortDescriptionLine2")
-    m.program.text = strField(item, "shortDescriptionLine3")
+    m.program.text = strField(item, "description")
     m.logo.uri = "pkg:/images/placeholder.png"
     loadLogo()
 end sub

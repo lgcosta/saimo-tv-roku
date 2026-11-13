@@ -8,6 +8,8 @@ sub runTask()
         loadPlaylist()
     else if mode = "m3upt" then
         loadM3upt()
+    else if mode = "extra_playlist" then
+        loadExtraPlaylist()
     else if mode = "vod_catalog" then
         loadVodCatalog()
     else if mode = "saimo_index" then
@@ -51,6 +53,27 @@ sub loadPlaylist()
         return
     end if
 
+    m.top.resultJson = FormatJson(channels)
+    m.top.count = channels.Count()
+    m.top.success = true
+end sub
+
+' Lista M3U externa acrescentada pelo utilizador.
+sub loadExtraPlaylist()
+    response = httpGet(m.top.url, m.top.userAgent, "")
+    if not response.ok then
+        m.top.error = "Nao foi possivel descarregar a lista: " + response.error
+        return
+    end if
+    if looksLikeHtml(response.body) then
+        m.top.error = "O endereco retornou uma pagina HTML, nao uma lista M3U."
+        return
+    end if
+    channels = parsePlaylist(response.body)
+    if channels.Count() = 0 then
+        m.top.error = "A lista foi descarregada mas nenhum canal foi reconhecido."
+        return
+    end if
     m.top.resultJson = FormatJson(channels)
     m.top.count = channels.Count()
     m.top.success = true
