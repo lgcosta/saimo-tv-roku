@@ -1,0 +1,511 @@
+' ---------------------------------------------------------------------------
+' Parte da cena principal: Lista de canais, Favoritos de canais e recentes.
+' O ficheiro MainScene.bs guarda o ciclo de vida e o estado; este corre no
+' mesmo ambito de componente (as scripts do MainScene.xml partilham o escopo).
+' ---------------------------------------------------------------------------
+
+' ---------------------------------------------------------------------------
+' Lista de canais
+' ---------------------------------------------------------------------------
+
+sub refreshPlaylist(notify as boolean)
+    if m.playlistUrl = "" then
+        showToast("Configure a URL da lista em Ajustes.")
+        return
+    end if
+    if m.fetchTask <> invalid then
+        if notify then showToast("Aguarde o carregamento atual terminar.")
+        return
+    end if
+
+    if not startFetch("playlist", m.playlistUrl, "", "", "", "") then return
+    m.playlistLoading = true
+    m.playlistNotify = notify
+    m.status.text = "Baixando lista de canais..."
+    if notify then showToast("Atualizando lista...")
+end sub
+
+' A lista de Portugal (M3UPT) e fixa: sempre presente, sempre baixada.
+' Fica em cache propria para nao depender da lista principal do usuario.
+sub refreshPortugal(notify as boolean)
+    if m.fetchTask <> invalid then
+        if notify then showToast("Aguarde o carregamento atual terminar.")
+        return
+    end if
+
+    if not startFetch("m3upt", m3uptPlaylistUrl(), "", "", "", "") then return
+    m.portugalLoading = true
+    m.portugalNotify = notify
+    m.status.text = "Baixando a lista de Portugal..."
+    if notify then showToast("Atualizando Canais de Portugal...")
+end sub
+
+sub refreshVodCatalog(notify as boolean)
+    if m.vodUrl = "" then
+        if notify then showToast("Configure a fonte do catálogo em Ajustes.")
+        return
+    end if
+    if m.fetchTask <> invalid then
+        if m.fetchKind = "playlist" then m.vodInitPending = true
+        if notify then showToast("Outra atualização está em andamento; o catálogo será sincronizado em seguida.")
+        return
+    end if
+
+    if isSaimoVodUrl(m.vodUrl) then
+        base = saimoBaseUrl(m.vodUrl)
+        if not startFetch("saimo_index", base + "indice.txt", base, "", "", "") then return
+    else
+        if not startFetch("vod_catalog", m.vodUrl, "", "", "", "") then return
+    end if
+    m.vodRefreshing = true
+    m.status.text = "Sincronizando catálogo de filmes e séries..."
+    if notify then showToast("Atualizando catálogo de filmes e séries...")
+    updateChrome()
+end sub
+
+' Verifica a cada 15 minutos, mas baixa apenas quando o cache tem mais de
+' 6 horas. Nunca interrompe a tela atual do usuario.
+sub runScheduledSync()
+    if m.fetchTask <> invalid then return
+    needPlaylist = m.playlistUrl <> "" and playlistIsStale()
+    needPortugal = portugalIsStale()
+    needExtras = extrasAreStale()
+    needVod = m.vodUrl <> "" and vodIsStale()
+    if needPlaylist then
+        if needPortugal then m.portugalInitPending = true
+        if needExtras then queueStaleExtras()
+        if needVod then m.vodInitPending = true
+        refreshPlaylist(false)
+    else if needPortugal then
+        if needExtras then queueStaleExtras()
+        if needVod then m.vodInitPending = true
+        refreshPortugal(false)
+    else if needExtras then
+        if needVod then m.vodInitPending = true
+        queueStaleExtras()
+        startNextExtra()
+    else if needVod then
+        refreshVodCatalog(false)
+    end if
+end sub
+
+function portugalIsStale() as boolean
+    if m.portugalChannels.Count() = 0 then return true
+    return isSyncStale(m.portugalLastSync)
+end function
+
+function extrasAreStale() as boolean
+    for each entry in m.extraPlaylists
+        if entry.enabled then
+            if isSyncStale(entry.lastSync) then return true
+        end if
+    end for
+    ' As listas externas nao tem cache em ficheiro: se ha listas guardadas
+    ' mas nenhum canal delas carregado, e preciso voltar a descarregar.
+    if m.extraPlaylists.Count() > 0 and m.extraChannels.Count() = 0 then return true
+    return false
+end function
+
+sub onVodRefreshTimer()
+    runScheduledSync()
+end sub
+
+function startFetch(mode as string, url as string, base as string, letter as string, title as string, signature as string) as boolean
+    if m.fetchTask <> invalid then return false
+    task = CreateObject("roSGNode", "FetchTask")
+    task.mode = mode
+    task.url = url
+    task.baseUrl = base
+    task.letter = letter
+    task.title = title
+    task.signature = signature
+    task.userAgent = m.userAgent
+    task.observeField("state", "onFetchState")
+    m.fetchTask = task
+    m.fetchKind = mode
+    task.control = "RUN"
+    return true
+end function
+
+sub onFetchState()
+    if m.fetchTask = invalid then return
+    state = m.fetchTask.state
+    if state <> "done" and state <> "stop" then return
+
+    task = m.fetchTask
+    kind = m.fetchKind
+    m.fetchTask = invalid
+    m.fetchKind = ""
+
+    ' Uma tarefa que falhou deixou de estar em curso: a barra some.
+    if task.success <> true then hideLoadProgress()
+
+    if kind = "playlist" then
+        handlePlaylistResult(task)
+    else if kind = "m3upt" then
+        handlePortugalResult(task)
+    else if kind = "extra_playlist" then
+        handleExtraPlaylistResult(task)
+    else if kind = "vod_catalog" then
+        handleVodCatalogResult(task)
+    else if kind = "saimo_index" then
+        handleSaimoIndexResult(task)
+    else if kind = "saimo_letter" then
+        handleSaimoLetterResult(task)
+    else if kind = "saimo_episodes" then
+        handleSaimoEpisodesResult(task)
+    else if kind = "saimo_search" then
+        handleSaimoSearchResult(task)
+    end if
+
+    ' Retoma a navegacao pedida enquanto outra requisicao terminava.
+    if m.pendingSaimoLetter <> "" then
+        letterPending = m.pendingSaimoLetter
+        m.pendingSaimoLetter = ""
+        loadSaimoLetter(letterPending)
+    else if kind <> "saimo_episodes" and m.pendingSaimoSeries <> invalid then
+        seriesPending = m.pendingSaimoSeries
+        m.pendingSaimoSeries = invalid
+        loadSaimoEpisodes(seriesPending)
+    end if
+    if m.fetchTask = invalid and kind <> "saimo_search" and m.pendingSaimoSearch <> "" then
+        queryPending = m.pendingSaimoSearch
+        entriesPending = m.pendingSaimoSearchEntries
+        m.pendingSaimoSearch = ""
+        m.pendingSaimoSearchEntries = []
+        startSaimoSearch(queryPending, entriesPending)
+    end if
+
+    ' Se o usuario abriu o catalogo enquanto a lista de canais carregava,
+    ' retoma a navegacao assim que a tarefa terminar.
+    if kind = "playlist" and m.pendingMoviesOpen then
+        m.pendingMoviesOpen = false
+        openVod(m.pendingVodFilter)
+    end if
+
+    ' A atualizacao segue a ordem: lista principal, Portugal, catalogo VOD.
+    ' Cada etapa espera pela anterior porque so corre uma tarefa de cada vez.
+    if m.fetchTask = invalid then
+        if m.portugalInitPending then
+            m.portugalInitPending = false
+            refreshPortugal(false)
+        else if m.extraPending and m.extraQueue.Count() > 0 then
+            startNextExtra()
+        else if m.vodInitPending then
+            m.vodInitPending = false
+            if m.vodUrl <> "" then refreshVodCatalog(false)
+        end if
+    end if
+end sub
+
+sub handlePortugalResult(task as object)
+    m.portugalLoading = false
+    notify = m.portugalNotify
+    m.portugalNotify = false
+
+    if task.success <> true then
+        message = strField(task, "error")
+        if message = "" then message = "Não foi possível atualizar os canais de Portugal."
+        m.status.text = message
+        print "SAIMO Portugal erro: " + message
+        if notify then showToastType(message, "error")
+        return
+    end if
+
+    channels = ParseJson(task.resultJson)
+    if type(channels) <> "roArray" or channels.Count() = 0 then
+        m.status.text = "A lista de Portugal não possui canais válidos."
+        if notify then showToastType("A lista de Portugal não possui canais válidos.", "error")
+        return
+    end if
+
+    applyPortugalChannels(channels, notify)
+    savePortugalCache(task.resultJson)
+    print "SAIMO Portugal: " + Str(m.portugalChannels.Count()).Trim() + " canais"
+    clock = CreateObject("roDateTime")
+    m.portugalLastSync = clock.AsSeconds()
+    writeSetting("portugalLastSync", Str(m.portugalLastSync).Trim())
+    if notify then showToastType(Str(m.portugalChannels.Count()).Trim() + " canais de Portugal atualizados.", "success")
+end sub
+
+sub handlePlaylistResult(task as object)
+    m.playlistLoading = false
+    notify = m.playlistNotify
+    m.playlistNotify = false
+    ' Descarta respostas de uma URL antiga, por exemplo se ela foi alterada em Ajustes.
+    if task.url.Trim() <> m.playlistUrl then
+        if m.playlistUrl <> "" then refreshPlaylist(false)
+        return
+    end if
+    if task.success <> true then
+        message = strField(task, "error")
+        if message = "" then message = "Falha ao baixar a lista."
+        m.status.text = message
+        print "SAIMO lista erro: " + message
+        if notify or m.activeView = "channels" then showToastType(message, "error")
+        if m.channels.Count() = 0 and m.activeView = "channels" then showEmptyState(message)
+        return
+    end if
+
+    channels = ParseJson(task.resultJson)
+    if type(channels) <> "roArray" or channels.Count() = 0 then
+        m.status.text = "A lista não possui canais válidos."
+        if notify or m.activeView = "channels" then showToastType("A lista não possui canais válidos.", "error")
+        if m.channels.Count() = 0 and m.activeView = "channels" then showEmptyState("A lista não possui canais válidos.")
+        return
+    end if
+
+    applyChannels(channels, notify)
+    saveCache(task.resultJson)
+    print "SAIMO lista principal: " + Str(m.mainChannels.Count()).Trim() + " canais"
+    clock = CreateObject("roDateTime")
+    m.playlistLastSync = clock.AsSeconds()
+    writeSetting("playlistLastSync", Str(m.playlistLastSync).Trim())
+    if notify or m.activeView = "channels" then showToastType(Str(m.channels.Count()).Trim() + " canais atualizados.", "success")
+    if m.epgUrl <> "" and not m.epgLoaded then loadEpg()
+end sub
+
+' ---------------------------------------------------------------------------
+' Favoritos de canais e canais recentes
+'
+' Sao dois grupos que nao existem em m.channels: guardam a chave do canal
+' (titulo + grupo) no registry e sao resolvidos contra a lista carregada.
+' ---------------------------------------------------------------------------
+
+function channelFavoritesGroup() as string
+    return "★ Favoritos"
+end function
+
+function recentChannelsGroup() as string
+    return "Recentes"
+end function
+
+function channelKey(ch as object) as string
+    if ch = invalid then return ""
+    title = strField(ch, "title")
+    if title = "" then return ""
+    return LCase(title) + "|" + LCase(strField(ch, "group"))
+end function
+
+function loadKeyList(settingKey as string) as object
+    raw = readSetting(settingKey)
+    if not isStringValue(raw) or raw = "" then return []
+    parsed = ParseJson(raw)
+    if type(parsed) <> "roArray" then return []
+    out = []
+    for each item in parsed
+        if type(item) = "roString" and item <> "" then out.Push(item)
+    end for
+    return out
+end function
+
+sub saveRecentChannels()
+    writeSetting("recentChannels", FormatJson(m.recentKeys))
+end sub
+
+sub rebuildRecentIndex()
+    m.recentIndex = {}
+    for each key in m.recentKeys
+        m.recentIndex[key] = true
+    end for
+end sub
+
+function channelIsFavorite(ch as object) as boolean
+    if ch = invalid then return false
+    return m.favorites[strField(ch, "title")] = true
+end function
+
+function recentHasChannel(key as string) as boolean
+    return m.recentIndex[key] = true
+end function
+
+' Mantem apenas as chaves que ainda correspondem a um canal carregado.
+function pruneKeys(keys as object, live as object) as object
+    out = []
+    for each key in keys
+        if live[key] = true then out.Push(key)
+    end for
+    return out
+end function
+
+' Um canal pertence ao grupo pedido? Os grupos especiais sao subconjuntos.
+function channelInGroup(ch as object, groupName as string) as boolean
+    if groupName = "" then return true
+    if groupName = channelFavoritesGroup() then return channelIsFavorite(ch)
+    if groupName = recentChannelsGroup() then return recentHasChannel(channelKey(ch))
+    return ch.group = groupName
+end function
+
+' Guarda o canal no topo da lista de recentes (12 no maximo).
+sub rememberRecentChannel(channel as object)
+    key = channelKey(channel)
+    if key = "" then return
+    updated = [key]
+    for each existing in m.recentKeys
+        if existing <> key and updated.Count() < 12 then updated.Push(existing)
+    end for
+    m.recentKeys = updated
+    print "SAIMO_RECENTE " + channel.title
+    rebuildRecentIndex()
+    saveRecentChannels()
+end sub
+
+sub toggleChannelFavorite(channel as object)
+    title = strField(channel, "title")
+    if title = "" then return
+    if channelIsFavorite(channel) then
+        print "SAIMO_FAVORITO -" + title
+        m.favorites.Delete(title)
+        remaining = []
+        for each existing in m.favoriteTitles
+            if existing <> title then remaining.Push(existing)
+        end for
+        m.favoriteTitles = remaining
+        showToast("Removido dos favoritos: " + title)
+    else
+        print "SAIMO_FAVORITO +" + title
+        m.favorites[title] = true
+        m.favoriteTitles.Push(title)
+        showToast("Adicionado aos favoritos: " + title)
+    end if
+    saveFavorites()
+    buildNav(true)
+    if m.selectedGroup = channelFavoritesGroup() then populateChannels(m.selectedGroup, false)
+end sub
+
+sub buildGroups()
+    m.groups = []
+    seen = {}
+
+    ' A categoria fixa de Portugal entra primeiro, para ser facil de
+    ' encontrar logo a seguir a "Todos os canais". As restantes seguem na
+    ' ordem em que aparecem. Sao duas passagens porque o roArray do Roku
+    ' nao tem Remove nem Insert.
+    for each ch in m.channels
+        group = ch.group
+        if group = "" then group = "Canais"
+        if group = portugalGroupName() then
+            if seen[group] = invalid then
+                row = { name: group, count: 0 }
+                seen[group] = row
+                m.groups.Push(row)
+            end if
+            row = seen[group]
+            row.count = row.count + 1
+        end if
+    end for
+
+    for each ch in m.channels
+        group = ch.group
+        if group = "" then group = "Canais"
+        if group <> portugalGroupName() then
+            if seen[group] = invalid then
+                row = { name: group, count: 0 }
+                seen[group] = row
+                m.groups.Push(row)
+            end if
+            row = seen[group]
+            row.count = row.count + 1
+        end if
+    end for
+
+    ' As chaves de favoritos e recentes apontam para canais por titulo+grupo.
+    ' Quando a lista de canais muda, as chaves orfas deixam de ter canal.
+    live = {}
+    for each ch in m.channels
+        live[channelKey(ch)] = true
+    end for
+    m.recentKeys = pruneKeys(m.recentKeys, live)
+    rebuildRecentIndex()
+end sub
+
+function findGroup(name as string) as object
+    for each row in m.groups
+        if row.name = name then return row
+    end for
+    if name = channelFavoritesGroup() then return { name: name, count: m.favoriteTitles.Count() }
+    if name = recentChannelsGroup() then return { name: name, count: m.recentKeys.Count() }
+    return invalid
+end function
+
+sub buildNav(preserveSelection as boolean)
+    oldKind = ""
+    oldValue = ""
+    if preserveSelection and m.navEntries.Count() > 0 then
+        oldIndex = m.navList.itemFocused
+        if oldIndex < 0 then oldIndex = m.navList.itemSelected
+        if oldIndex >= 0 and oldIndex < m.navEntries.Count() then
+            oldKind = m.navEntries[oldIndex].kind
+            oldValue = m.navEntries[oldIndex].value
+        end if
+    end if
+
+    entries = []
+    entries.Push({ title: "Ao vivo", kind: "view", value: "channels", icon: "nav_live.png" })
+    entries.Push({ title: "Descobrir", kind: "view", value: "discover", icon: "nav_discover.png" })
+    entries.Push({ title: "Catálogo A–Z", kind: "view", value: "catalog", icon: "nav_catalog.png" })
+    entries.Push({ title: "Filmes", kind: "view", value: "movies", icon: "nav_movies.png" })
+    entries.Push({ title: "Séries", kind: "view", value: "series", icon: "nav_series.png" })
+    entries.Push({ title: "Favoritos", kind: "view", value: "favorites", icon: "nav_favorites.png" })
+    entries.Push({ title: "Buscar", kind: "search", value: "", icon: "nav_search.png" })
+    entries.Push({ title: "Guia de TV", kind: "guide", value: "", icon: "nav_guide.png" })
+    entries.Push({ title: "Ajustes", kind: "settings", value: "", icon: "nav_settings.png" })
+    entries.Push({ title: "Sincronizar", kind: "refresh", value: "", icon: "nav_sync.png" })
+
+    if m.channels.Count() > 0 then
+        entries.Push({ title: "Categorias", kind: "header", value: "", icon: "nav_blank.png" })
+        entries.Push({ title: "Todos os canais", kind: "group", value: "", icon: "nav_group.png" })
+        if m.favoriteTitles.Count() > 0 then
+            entries.Push({ title: channelFavoritesGroup() + " (" + Str(m.favoriteTitles.Count()).Trim() + ")", kind: "group", value: channelFavoritesGroup(), icon: "" })
+        end if
+        if m.recentKeys.Count() > 0 then
+            entries.Push({ title: recentChannelsGroup() + " (" + Str(m.recentKeys.Count()).Trim() + ")", kind: "group", value: recentChannelsGroup(), icon: "" })
+        end if
+        for each row in m.groups
+            ' A contagem volta ao menu: as categorias de grupo nao levam
+            ' icone, por isso sobra toda a largura do item para o texto.
+            entries.Push({ title: row.name + " (" + Str(row.count).Trim() + ")", kind: "group", value: row.name, icon: "" })
+        end for
+    end if
+
+    if m.favoriteTitles.Count() > 0 or m.recentKeys.Count() > 0 then
+        flow = ""
+        position = -1
+        for each entry in entries
+            position = position + 1
+            flow = flow + Str(position).Trim() + ":" + entry.title + "  "
+        end for
+        print "SAIMO_NAV favoritos=" + Str(m.favoriteTitles.Count()).Trim() + " recentes=" + Str(m.recentKeys.Count()).Trim() + " [" + flow + "]"
+    end if
+    m.navEntries = entries
+    root = CreateObject("roSGNode", "ContentNode")
+    for each entry in entries
+        item = root.CreateChild("ContentNode")
+        item.title = entry.title
+        if entry.icon <> "" then
+            iconPath = "pkg:/images/" + entry.icon
+            item.HDListItemIconUrl = iconPath
+            item.HDListItemIconSelectedUrl = iconPath
+        end if
+    end for
+    m.navList.content = root
+
+    ' O menu fica sempre no topo. Os grupos aparecem logo abaixo; nao pulamos
+    ' para o grupo atual para nao esconder as acoes principais.
+    restored = -1
+    if preserveSelection and oldKind <> "" then restored = findNavIndex(oldKind, oldValue)
+    if restored >= 0 then m.navList.jumpToItem = restored else m.navList.jumpToItem = 0
+end sub
+
+function findNavIndex(kind as string, value as string) as integer
+    index = 0
+    for each entry in m.navEntries
+        if entry.kind = kind and entry.value = value then return index
+        index = index + 1
+    end for
+    return -1
+end function
+
+' ---------------------------------------------------------------------------
+' Cromo da tela: cabecalho, relogio e sincronizacao
+' ---------------------------------------------------------------------------

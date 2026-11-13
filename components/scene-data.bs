@@ -1,0 +1,298 @@
+' ---------------------------------------------------------------------------
+' Parte da cena principal: Persistencia, Cache local.
+' O ficheiro MainScene.bs guarda o ciclo de vida e o estado; este corre no
+' mesmo ambito de componente (as scripts do MainScene.xml partilham o escopo).
+' ---------------------------------------------------------------------------
+
+' ---------------------------------------------------------------------------
+' Persistencia
+' ---------------------------------------------------------------------------
+
+function readSetting(key as string) as string
+    value = m.registry.Read(key)
+    if value = invalid then return ""
+    return value
+end function
+
+sub writeSetting(key as string, value as string)
+    m.registry.Write(key, value)
+    m.registry.Flush()
+end sub
+
+sub loadFavorites()
+    raw = readSetting("favorites")
+    if raw = "" then return
+    parsed = ParseJson(raw)
+    if type(parsed) <> "roArray" then return
+    for each title in parsed
+        if type(title) = "roString" or type(title) = "String" then
+            if title <> "" then
+                m.favorites[title] = true
+                m.favoriteTitles.Push(title)
+            end if
+        end if
+    end for
+end sub
+
+sub saveFavorites()
+    writeSetting("favorites", FormatJson(m.favoriteTitles))
+end sub
+
+function vodFavoriteKey(item as object) as string
+    if item = invalid then return ""
+    itemType = LCase(strField(item, "type"))
+    titleKey = saimoArtworkTitleKey(strField(item, "title"))
+    if itemType = "" or titleKey = "" then return ""
+    year = strField(item, "year")
+    return itemType + "|" + titleKey + "|" + year
+end function
+
+sub loadVodFavorites()
+    raw = readSetting("vodFavorites")
+    if raw = "" then return
+    parsed = ParseJson(raw)
+    if type(parsed) <> "roArray" then return
+    for each item in parsed
+        if type(item) <> "roAssociativeArray" then continue for
+        key = vodFavoriteKey(item)
+        if key <> "" and m.vodFavoritesByKey[key] = invalid then
+            m.vodFavoritesByKey[key] = true
+            m.vodFavoriteItems.Push(item)
+        end if
+    end for
+end sub
+
+sub saveVodFavorites()
+    writeSetting("vodFavorites", FormatJson(m.vodFavoriteItems))
+end sub
+
+' ---------------------------------------------------------------------------
+' Cache local
+' ---------------------------------------------------------------------------
+
+sub loadCachedPlaylist()
+    if m.playlistUrl = "" then return
+    cachedUrl = readCacheAscii("cachefs:/saimo_v2_playlist.url")
+    if not isStringValue(cachedUrl) then return
+    if cachedUrl.Trim() <> m.playlistUrl then return
+    raw = readCacheAscii("cachefs:/saimo_v2_playlist.json")
+    if not isStringValue(raw) or raw = "" then return
+    parsed = ParseJson(raw)
+    if type(parsed) <> "roArray" then return
+    if parsed.Count() = 0 then return
+    applyChannels(parsed, false)
+end sub
+
+sub saveCache(json as string)
+    if json = "" then return
+    WriteAsciiFile("cachefs:/saimo_v2_playlist.json", json)
+    WriteAsciiFile("cachefs:/saimo_v2_playlist.url", m.playlistUrl)
+end sub
+
+' Cache da lista fixa de Portugal (M3UPT). E independente da lista principal:
+' mudar a URL da lista do usuario nao descarta os canais portugueses.
+sub loadCachedPortugal()
+    m.portugalChannels = []
+    raw = readCacheAscii("cachefs:/m3upt_channels.json")
+    if not isStringValue(raw) or raw = "" then return
+    parsed = ParseJson(raw)
+    if type(parsed) <> "roArray" or parsed.Count() = 0 then return
+    applyPortugalChannels(parsed, false)
+end sub
+
+sub savePortugalCache(json as string)
+    if json = "" then return
+    WriteAsciiFile("cachefs:/m3upt_channels.json", json)
+end sub
+
+sub loadCachedVodCatalog()
+    m.vodAll = []
+    m.vodMovies = []
+    m.vodSeries = []
+    m.vodVisibleItems = []
+    m.vodLoaded = false
+    m.saimoIndexLetters = []
+    m.saimoHighlights = []
+    m.saimoShelves = []
+    m.saimoBases = {}
+    m.saimoCovers = {}
+    m.saimoIndexLoaded = false
+    m.saimoIndexSignature = ""
+    m.saimoBase = ""
+    if m.vodGrid <> invalid then m.vodGrid.content = CreateObject("roSGNode", "ContentNode")
+    if isSaimoVodUrl(m.vodUrl) then
+        loadCachedSaimoIndex()
+        return
+    end if
+    if m.vodUrl = "" then return
+    cachedUrl = readCacheAscii("cachefs:/saimo_vod_catalog.url")
+    if not isStringValue(cachedUrl) or cachedUrl.Trim() <> m.vodUrl then return
+    raw = readCacheAscii("cachefs:/saimo_vod_catalog.json")
+    if not isStringValue(raw) or raw = "" then return
+    parsed = ParseJson(raw)
+    if type(parsed) <> "roArray" or parsed.Count() = 0 then return
+    m.vodAll = parsed
+    rebuildVodIndexes()
+    m.vodLoaded = true
+    m.status.text = Str(m.vodAll.Count()).Trim() + " itens do catálogo local; sincronizando..."
+end sub
+
+sub saveVodCache(json as string)
+    if json = "" or m.vodUrl = "" then return
+    WriteAsciiFile("cachefs:/saimo_vod_catalog.json", json)
+    WriteAsciiFile("cachefs:/saimo_vod_catalog.url", m.vodUrl)
+end sub
+
+sub loadCachedSaimoIndex()
+    m.saimoIndexLoaded = false
+    base = saimoBaseUrl(m.vodUrl)
+    cachedUrl = readCacheAscii("cachefs:/saimo_vod_index.url")
+    raw = readCacheAscii("cachefs:/saimo_vod_index.json")
+    if not isStringValue(cachedUrl) or cachedUrl.Trim() <> base then return
+    if not isStringValue(raw) or raw = "" then return
+    parsed = ParseJson(raw)
+    if type(parsed) <> "roAssociativeArray" then return
+    if type(parsed.letters) <> "roArray" or parsed.letters.Count() = 0 then return
+    m.saimoIndexLetters = parsed.letters
+    if type(parsed.bases) = "roAssociativeArray" then m.saimoBases = parsed.bases
+    if type(parsed.covers) = "roAssociativeArray" then m.saimoCovers = parsed.covers
+    if type(parsed.highlights) = "roArray" then m.saimoHighlights = parsed.highlights
+    if type(parsed.shelves) = "roArray" then m.saimoShelves = parsed.shelves
+    if isStringValue(parsed.signature) then m.saimoIndexSignature = parsed.signature
+    if m.saimoIndexSignature = "" then m.saimoIndexSignature = saimoIndexSignature(m.saimoIndexLetters, m.saimoBases)
+    m.saimoBase = base
+    m.saimoIndexLoaded = true
+    m.status.text = Str(m.saimoIndexLetters.Count()).Trim() + " letras do catálogo em cache; verificando atualizações..."
+end sub
+
+sub saveSaimoIndex(json as string)
+    if json = "" or m.vodUrl = "" then return
+    WriteAsciiFile("cachefs:/saimo_vod_index.json", json)
+    WriteAsciiFile("cachefs:/saimo_vod_index.url", saimoBaseUrl(m.vodUrl))
+end sub
+
+function isSyncStale(lastSync as integer) as boolean
+    if lastSync <= 0 then return true
+    clock = CreateObject("roDateTime")
+    nowSeconds = clock.AsSeconds()
+    return (nowSeconds - lastSync) >= 21600
+end function
+
+function playlistIsStale() as boolean
+    ' O cache em cachefs e apagado quando a app e reinstalada, mas o
+    ' registry sobrevive. Sem esta guarda a app achava que estava em dia e
+    ' ficava com a grelha vazia ate passarem as 6 horas.
+    if m.mainChannels.Count() = 0 then return true
+    return isSyncStale(m.playlistLastSync)
+end function
+
+sub rebuildVodIndexes()
+    m.vodMovies = []
+    m.vodSeries = []
+    for each entry in m.vodAll
+        if LCase(strField(entry, "type")) = "series" then
+            m.vodSeries.Push(entry)
+        else
+            m.vodMovies.Push(entry)
+        end if
+    end for
+    ' Compatibilidade com a busca local.
+    m.movies = m.vodAll
+    m.movieRows = []
+end sub
+
+function vodIsStale() as boolean
+    return isSyncStale(m.vodLastSync)
+end function
+
+function relativeAge(lastSync as integer) as string
+    if lastSync <= 0 then return "nunca"
+    clock = CreateObject("roDateTime")
+    delta = clock.AsSeconds() - lastSync
+    if delta < 0 then delta = 0
+    if delta < 60 then return "agora"
+    if delta < 3600 then return Str(Int(delta / 60)).Trim() + " min"
+    if delta < 86400 then return Str(Int(delta / 3600)).Trim() + " h"
+    return Str(Int(delta / 86400)).Trim() + " d"
+end function
+
+function vodSyncLabel() as string
+    if m.vodRefreshing then return "Atualizando agora..."
+    if m.vodLastSync <= 0 then return "Ainda não sincronizado"
+    if vodIsStale() then return "Cache antigo; sincronização pendente"
+    return "Atualizado há " + relativeAge(m.vodLastSync)
+end function
+
+function playlistSyncLabel() as string
+    if m.playlistLastSync <= 0 then return "Ainda não sincronizado"
+    if playlistIsStale() then return "Cache antigo; sincronização pendente"
+    return "Atualizado há " + relativeAge(m.playlistLastSync)
+end function
+
+sub clearCache()
+    DeleteFile("cachefs:/saimo_v2_playlist.json")
+    DeleteFile("cachefs:/saimo_v2_playlist.url")
+    DeleteFile("cachefs:/m3upt_channels.json")
+    DeleteFile("cachefs:/saimo_playlist.txt")
+    DeleteFile("cachefs:/saimo_playlist.url")
+    DeleteFile("cachefs:/saimo_epg.xml")
+    DeleteFile("cachefs:/saimo_epg.url")
+    DeleteFile("cachefs:/saimo_vod_catalog.json")
+    DeleteFile("cachefs:/saimo_vod_catalog.url")
+    DeleteFile("cachefs:/saimo_vod_index.json")
+    DeleteFile("cachefs:/saimo_vod_index.url")
+    DeleteFile("cachefs:/saimo_vod_bases.json")
+    DeleteFile("cachefs:/saimo_vod_bases.url")
+    DeleteFile("cachefs:/saimo_vod_covers.json")
+    DeleteFile("cachefs:/saimo_vod_covers.url")
+    DeleteFile("cachefs:/saimo_vod_fichas.txt")
+    DeleteFile("cachefs:/saimo_vod_fichas.url")
+    DeleteFile("cachefs:/saimo_vod_fichas.ready")
+    DeleteFile("cachefs:/saimo_vod_search.txt")
+    DeleteFile("cachefs:/saimo_vod_search.url")
+    DeleteFile("cachefs:/saimo_vod_letters.url")
+    for each letter in ["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z","#"]
+        DeleteFile(saimoLetterCachePath("all", letter))
+        DeleteFile(saimoLetterCachePath("movies", letter))
+        DeleteFile(saimoLetterCachePath("series", letter))
+    end for
+    deleteSaimoArtworkCaches()
+    m.saimoIndexLetters = []
+    m.saimoHighlights = []
+    m.saimoIndexLoaded = false
+    m.saimoIndexSignature = ""
+    m.saimoBases = {}
+    m.saimoCovers = {}
+    m.vodAll = []
+    m.vodMovies = []
+    m.vodSeries = []
+    m.vodLoaded = false
+    m.vodLastSync = 0
+    m.playlistLastSync = 0
+    m.portugalLastSync = 0
+    m.portugalChannels = []
+    for i = 0 to m.extraPlaylists.Count() - 1
+        m.extraPlaylists[i].lastSync = 0
+        m.extraPlaylists[i].error = ""
+    end for
+    m.extraChannels = []
+    writeSetting("vodLastSync", "0")
+    writeSetting("playlistLastSync", "0")
+    writeSetting("portugalLastSync", "0")
+    m.epg = {}
+    m.epgLoaded = false
+    showToastType("Cache local apagado.", "success")
+end sub
+
+sub invalidateSaimoDerivedCaches()
+    DeleteFile("cachefs:/saimo_vod_search.txt")
+    DeleteFile("cachefs:/saimo_vod_search.url")
+    DeleteFile("cachefs:/saimo_vod_letters.url")
+    for each letter in ["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z","#"]
+        DeleteFile(saimoLetterCachePath("all", letter))
+        DeleteFile(saimoLetterCachePath("movies", letter))
+        DeleteFile(saimoLetterCachePath("series", letter))
+    end for
+    ' As capas derivadas do catalogo tambem mudam junto com o indice.
+    deleteSaimoArtworkCaches()
+end sub

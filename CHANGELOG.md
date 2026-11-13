@@ -6,6 +6,41 @@ o versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
 
 ## [Não publicado]
 
+## [2.7.0] — 2026-11-13
+
+### Removido
+- **Preview do canal em foco.** A janela de vídeo que acompanhava o cursor na
+  grelhe gastava um segundo descodificador no aparelho e tapava os cartões de
+  canal. O nome, o grupo e o programa em andamento passaram para a barra
+  lateral, que é onde o utilizador já procura o estado da app.
+
+### Adicionado
+- **★ Favoritos de canais no menu.** A tecla de informação numa grelhe marca ou
+  desmarca o canal em foco; a categoria aparece no menu logo abaixo de "Todos
+  os canais" e o cartão passa a mostrar uma estrela antes do grupo. Usa os
+  favoritos que a app já guardava, agora acessíveis sem passar pela vista de
+  lista.
+- **Recentes.** Os últimos 12 canais sintonizados ficam numa categoria própria,
+  por ordem de utilização, para trocar entre os canais do dia sem percorrer 641
+  cartões.
+- **BrighterScript** como linguagem do projecto: `.bs` compilado para `.brs`
+  pelo `bsc`, com validação de funções e tipos antes de empacotar.
+
+### Corrigido
+- **Títulos das categorias sobrepostos no "Descobrir".** A fileira do `RowList`
+  tinha 204 px de altura e os cartões 306 px, pelo que cada fileira invadia o
+  título da seguinte. A fileira passou a ser rótulo (24) + espaço (28) + cartão
+  (196) = 252 px, e os cartões passaram a 118 px de largura, sem a folga morta
+  de 50 px que os afastava.
+- O cabeçalho do "Descobrir" saltava 64 px para a direita ao entrar na tela e
+  voltava ao sítio ao sair; passou a ficar fixo.
+
+### Alterado
+- O `MainScene.brs` (4 300 linhas) foi repartido por onze ficheiros, um por
+  responsabilidade (`scene-channels`, `scene-vod`, `scene-settings`,
+  `scene-player`, `scene-keys`, …). As scripts de um componente partilham o
+  mesmo âmbito, por isso o comportamento não muda.
+
 ## [2.6.0] — 2026-11-13
 
 ### Adicionado

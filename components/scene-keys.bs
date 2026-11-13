@@ -1,0 +1,282 @@
+' ---------------------------------------------------------------------------
+' Parte da cena principal: Teclado e foco.
+' O ficheiro MainScene.bs guarda o ciclo de vida e o estado; este corre no
+' mesmo ambito de componente (as scripts do MainScene.xml partilham o escopo).
+' ---------------------------------------------------------------------------
+
+function onKeyEvent(key as string, press as boolean) as boolean
+    if not press then return false
+    k = LCase(key)
+    ' Colunas do grid de episódios, igual a itemSize/numColumns do XML.
+    EPISODE_COLUMNS = 3
+
+    if m.dialog <> invalid then return false
+
+    if not m.playerVisible and m.vodDetailGroup.visible and (m.activeView = "vod_episodes" or m.activeView = "saimo_episodes") then
+        if k = "right" and m.vodDetailActions.hasFocus() then
+            ' As ações são uma grade horizontal: só o último item sai para a
+            ' direita; os demais avançam de pílula pelo foco padrão do grid.
+            if m.vodDetailActions.itemFocused >= m.detailActionEntries.Count() - 1 then
+                if m.vodSeasonList.visible then
+                    m.vodSeasonList.setFocus(true)
+                else if m.vodVisibleItems.Count() > 0 then
+                    m.episodeGrid.setFocus(true)
+                end if
+                return true
+            end if
+            return false
+        else if k = "right" and m.vodSeasonList.visible and m.vodSeasonList.hasFocus() then
+            if m.vodVisibleItems.Count() > 0 then m.episodeGrid.setFocus(true)
+            return true
+        else if k = "left" and m.episodeGrid.hasFocus() then
+            episodeIndex = m.episodeGrid.itemFocused
+            if m.vodSeasonList.visible and episodeIndex >= 0 and Int(episodeIndex / EPISODE_COLUMNS) * EPISODE_COLUMNS = episodeIndex then
+                m.vodSeasonList.setFocus(true)
+                return true
+            end if
+        else if k = "down" and m.vodSeasonList.hasFocus() then
+            if m.vodVisibleItems.Count() > 0 then m.episodeGrid.setFocus(true)
+            return true
+        else if k = "up" and m.episodeGrid.hasFocus() then
+            if m.vodSeasonList.visible then
+                m.vodSeasonList.setFocus(true)
+            else
+                m.vodDetailActions.setFocus(true)
+            end if
+            return true
+        else if k = "up" and m.vodSeasonList.hasFocus() then
+            m.vodDetailActions.setFocus(true)
+            return true
+        else if k = "down" and m.vodDetailActions.hasFocus() then
+            if m.vodSeasonList.visible then
+                m.vodSeasonList.setFocus(true)
+            else if m.vodVisibleItems.Count() > 0 then
+                m.episodeGrid.setFocus(true)
+            end if
+            return true
+        end if
+    end if
+
+    if m.playerVisible then
+        if k = "back" then
+            closePlayer()
+            return true
+        else if k = "ok" then
+            togglePlayback()
+            return true
+        else if k = "play" then
+            if LCase(m.video.state) <> "playing" then togglePlayback()
+            return true
+        else if k = "pause" then
+            if LCase(m.video.state) = "playing" then togglePlayback()
+            return true
+        else if k = "left" then
+            seekBy(-10)
+            return true
+        else if k = "right" then
+            seekBy(30)
+            return true
+        else if k = "up" or k = "down" then
+            showPlayerOverlay()
+            return true
+        end if
+        return false
+    end if
+
+    if m.settingsVisible then
+        if k = "back" then
+            closeSettings()
+            return true
+        end if
+        return false
+    end if
+
+    if m.guideVisible then
+        if k = "back" then
+            closeGuide()
+            return true
+        end if
+        return false
+    end if
+
+    if m.aboutVisible then
+        if k = "back" then
+            closeAbout()
+            return true
+        end if
+        return false
+    end if
+
+    if m.searchActive and m.activeView = "search" and k = "back" then
+        restoreAfterSearch()
+        return true
+    end if
+
+    if k = "back" and m.activeView = "vod_movie_detail" then
+        restoreVodDetailReturn()
+        return true
+    end if
+
+    if k = "back" and m.activeView = "saimo_episodes" then
+        restoreSeriesDetailReturn()
+        return true
+    end if
+
+    if k = "back" and m.activeView = "saimo_catalog" then
+        if m.saimoBackToHome then
+            m.saimoBackToHome = false
+            showSaimoHome(m.vodFilter)
+        else
+            showSaimoLetters(m.vodFilter)
+        end if
+        return true
+    end if
+
+    if k = "back" and m.activeView = "saimo_episodes_loading" then
+        restoreSeriesDetailReturn()
+        return true
+    end if
+
+    if k = "back" and (m.activeView = "saimo_letters" or m.activeView = "saimo_home") then
+        populateChannels(m.selectedGroup, true)
+        return true
+    end if
+
+    if k = "back" and m.activeView = "vod_episodes" then
+        restoreSeriesDetailReturn()
+        return true
+    end if
+
+    if k = "back" and m.activeView = "vod_favorites" then
+        if m.favoriteReturnView = "saimo_home" then
+            showSaimoHome(m.favoriteReturnFilter)
+        else if m.favoriteReturnView = "saimo_catalog" then
+            showSaimoGrid(m.saimoCurrentItems)
+        else if m.favoriteReturnView = "vod" or m.favoriteReturnView = "vod_movie_detail" or m.favoriteReturnView = "vod_episodes" or m.favoriteReturnView = "saimo_episodes" or m.favoriteReturnView = "saimo_episodes_loading" then
+            showVod(m.favoriteReturnFilter)
+        else
+            populateChannels(m.selectedGroup, true)
+        end if
+        return true
+    end if
+
+    if k = "back" and m.activeView = "vod" then
+        populateChannels(m.selectedGroup, true)
+        return true
+    end if
+
+    if k = "left" and m.shelfList.hasFocus() then
+        focus = m.shelfList.rowItemFocused
+        if type(focus) = "roArray" and focus.Count() >= 2 and focus[1] = 0 then
+            m.navList.setFocus(true)
+            return true
+        end if
+        return false
+    end if
+
+    if k = "left" and m.vodDetailGroup.visible and (m.vodDetailActions.hasFocus() or m.vodSeasonList.hasFocus()) then
+        m.navList.setFocus(true)
+        return true
+    end if
+
+    if k = "left" and m.vodDetailGroup.visible and m.episodeGrid.hasFocus() and (m.activeView = "vod_episodes" or m.activeView = "saimo_episodes") then
+        episodeIndex = m.episodeGrid.itemFocused
+        if episodeIndex >= 0 and Int(episodeIndex / EPISODE_COLUMNS) * EPISODE_COLUMNS = episodeIndex then
+            m.navList.setFocus(true)
+            return true
+        end if
+    end if
+
+    if k = "left" and (m.itemList.hasFocus() or m.vodGrid.hasFocus() or m.channelGrid.hasFocus()) then
+        if m.activeView = "saimo_letters" or m.activeView = "saimo_home" or m.activeView = "search" or m.activeView = "channels" or m.activeView = "vod" then
+            m.navList.setFocus(true)
+        else if m.activeView = "saimo_catalog" or m.activeView = "saimo_episodes" then
+            m.navList.setFocus(true)
+        else
+            m.navList.setFocus(true)
+        end if
+        return true
+    end if
+
+    if k = "right" and m.navList.hasFocus() then
+        if m.activeView = "channels" and m.channelGrid.visible and m.channelGrid.content.Count() > 0 then
+            m.channelGrid.setFocus(true)
+            return true
+        end if
+        if m.activeView = "saimo_home" and m.shelfList.visible then
+            m.shelfList.setFocus(true)
+            return true
+        else if m.vodDetailGroup.visible and (m.activeView = "vod_episodes" or m.activeView = "saimo_episodes" or m.activeView = "saimo_episodes_loading") then
+            if m.vodSeasonList.visible then
+                m.vodSeasonList.setFocus(true)
+            else if m.vodVisibleItems.Count() > 0 then
+                m.episodeGrid.setFocus(true)
+            else
+                m.vodDetailActions.setFocus(true)
+            end if
+            return true
+        else if m.activeView = "vod_episodes" or m.activeView = "saimo_episodes" then
+            if m.vodVisibleItems.Count() > 0 then
+                m.episodeGrid.setFocus(true)
+                return true
+            end if
+        else if m.activeView = "vod_movie_detail" and m.vodDetailGroup.visible then
+            m.vodDetailActions.setFocus(true)
+            return true
+        else if m.activeView = "vod" or m.activeView = "vod_favorites" or m.activeView = "vod_episodes" or m.activeView = "saimo_home" or m.activeView = "saimo_catalog" or m.activeView = "saimo_episodes" or m.activeView = "saimo_episodes_loading" then
+            if m.vodVisibleItems.Count() > 0 then
+                m.vodGrid.setFocus(true)
+                return true
+            end if
+        else if m.itemList.content <> invalid then
+            m.itemList.setFocus(true)
+            return true
+        end if
+    end if
+
+    if k = "replay" then
+        openSearchDialog()
+        return true
+    end if
+
+    if k = "options" or k = "info" or key = "*" then
+        toggleFavorite()
+        return true
+    end if
+
+    return false
+end function
+
+sub focusListOrNav()
+    if m.activeView = "saimo_home" and m.shelfList.visible then
+        m.shelfList.setFocus(true)
+        return
+    end if
+    if m.activeView = "vod_movie_detail" and m.vodDetailGroup.visible then
+        m.vodDetailActions.setFocus(true)
+        return
+    end if
+    if m.activeView = "vod_episodes" or m.activeView = "saimo_episodes" then
+        if m.vodVisibleItems.Count() > 0 then
+            m.episodeGrid.setFocus(true)
+        else
+            m.navList.setFocus(true)
+        end if
+        return
+    end if
+    if m.activeView = "vod" or m.activeView = "vod_favorites" or m.activeView = "vod_episodes" or m.activeView = "saimo_home" or m.activeView = "saimo_catalog" or m.activeView = "saimo_episodes" or m.activeView = "saimo_episodes_loading" then
+        if m.vodVisibleItems.Count() > 0 then
+            m.vodGrid.setFocus(true)
+        else
+            m.navList.setFocus(true)
+        end if
+    else if m.itemList.content <> invalid and m.listEntries.Count() > 0 then
+        m.itemList.setFocus(true)
+    else
+        m.navList.setFocus(true)
+    end if
+end sub
+
+' ---------------------------------------------------------------------------
+' Toast
+' ---------------------------------------------------------------------------

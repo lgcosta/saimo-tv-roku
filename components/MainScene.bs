@@ -1,0 +1,258 @@
+' Cliente nativo Saimo TV para Roku.
+' Interface baseada em LabelList + indices. A selecao nao depende de campos
+' personalizados em itens, o que evita o problema de clique sem resposta.
+
+sub init()
+    m.video = m.top.findNode("video")
+    m.homeGroup = m.top.findNode("homeGroup")
+    m.palette = appPalette()
+    m.navList = m.top.findNode("navList")
+    m.listEyebrow = m.top.findNode("listEyebrow")
+    m.listTitle = m.top.findNode("listTitle")
+    m.listSub = m.top.findNode("listSub")
+    m.syncHint = m.top.findNode("syncHint")
+    m.clock = m.top.findNode("clock")
+    m.hint = m.top.findNode("hint")
+    m.itemList = m.top.findNode("itemList")
+    m.vodGrid = m.top.findNode("vodGrid")
+    m.channelGrid = m.top.findNode("channelGrid")
+    m.loadProgress = m.top.findNode("loadProgress")
+    m.loadBar = m.top.findNode("loadBar")
+    m.loadText = m.top.findNode("loadText")
+    m.loadBarWidth = 0
+    m.loadLabel = ""
+    m.episodeGrid = m.top.findNode("episodeGrid")
+    m.vodDetailGroup = m.top.findNode("vodDetailGroup")
+    m.fichaBackdrop = m.top.findNode("fichaBackdrop")
+    m.vodDetailPoster = m.top.findNode("vodDetailPoster")
+    m.vodDetailTipo = m.top.findNode("vodDetailTipo")
+    m.vodDetailTitle = m.top.findNode("vodDetailTitle")
+    m.vodDetailFrase = m.top.findNode("vodDetailFrase")
+    m.vodDetailMeta = m.top.findNode("vodDetailMeta")
+    m.vodDetailSynopsis = m.top.findNode("vodDetailSynopsis")
+    m.vodDetailActions = m.top.findNode("vodDetailActions")
+    m.vodSeasonHeading = m.top.findNode("vodSeasonHeading")
+    m.vodSeasonList = m.top.findNode("vodSeasonList")
+    m.vodEpisodeEmpty = m.top.findNode("vodEpisodeEmpty")
+    m.shelfList = m.top.findNode("shelfList")
+
+    m.emptyLabel = m.top.findNode("emptyLabel")
+    m.emptyIcon = m.top.findNode("emptyIcon")
+    m.emptyAction = m.top.findNode("emptyAction")
+    m.status = m.top.findNode("status")
+    m.settingsGroup = m.top.findNode("settingsGroup")
+    m.settingsList = m.top.findNode("settingsList")
+    m.settingsHelp = m.top.findNode("settingsHelp")
+    m.guideGroup = m.top.findNode("guideGroup")
+    m.guideSub = m.top.findNode("guideSub")
+    m.guideList = m.top.findNode("guideList")
+    m.aboutGroup = m.top.findNode("aboutGroup")
+    m.aboutText = m.top.findNode("aboutText")
+    m.playerOverlay = m.top.findNode("playerOverlay")
+    m.playerSpinner = m.top.findNode("playerSpinner")
+    m.playerCenterState = m.top.findNode("playerCenterState")
+    m.playerTitle = m.top.findNode("playerTitle")
+    m.playerSubtitle = m.top.findNode("playerSubtitle")
+    m.playerState = m.top.findNode("playerState")
+    m.playerTime = m.top.findNode("playerTime")
+    m.playerHint = m.top.findNode("playerHint")
+    m.playerLive = m.top.findNode("playerLive")
+    m.progressTrack = m.top.findNode("progressTrack")
+    m.progressFill = m.top.findNode("progressFill")
+    m.toastAccent = m.top.findNode("toastAccent")
+    m.toastBg = m.top.findNode("toastBg")
+    m.toastIcon = m.top.findNode("toastIcon")
+    m.toast = m.top.findNode("toast")
+    m.toastTimer = m.top.findNode("toastTimer")
+    m.failoverTimer = m.top.findNode("failoverTimer")
+    m.progressTimer = m.top.findNode("progressTimer")
+    m.playerAutoHideTimer = m.top.findNode("playerAutoHideTimer")
+    m.vodRefreshTimer = m.top.findNode("vodRefreshTimer")
+
+    m.registry = CreateObject("roRegistrySection", "SaimoTV")
+    m.defaultUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+
+    m.playlistUrl = readSetting("playlistUrl")
+    m.epgUrl = readSetting("epgUrl")
+    m.userAgent = readSetting("userAgent")
+    if m.userAgent = "" then m.userAgent = m.defaultUA
+    ' O EPG do M3UPT e o padrao. Vem comprimido em gzip, o que o Roku nao
+    ' sabe ler; o app avisa uma vez e espera que o usuario indique um
+    ' XMLTV em texto puro em Ajustes.
+    if m.epgUrl = "" then
+        m.epgUrl = m3uptEpgUrl()
+        writeSetting("epgUrl", m.epgUrl)
+    end if
+    m.vodUrl = readSetting("vodUrl")
+    m.publicCatalog = "https://saimo-canais.pages.dev/catalogo.txt"
+    m.defaultVodUrl = "https://saimo-filmes.pages.dev/"
+    lowVod = LCase(m.vodUrl)
+    if m.vodUrl = "" or Instr(1, lowVod, "filmes-saimo.pages.dev") > 0 or Instr(1, lowVod, "saimoplayer/main/vod") > 0 then
+        m.vodUrl = m.defaultVodUrl
+        writeSetting("vodUrl", m.vodUrl)
+    end if
+
+    m.channels = []
+    ' Ultimos canais sintonizados. Os favoritos de canais ja vivem em
+    ' m.favorites/m.favoriteTitles, gravados por saveFavorites().
+    m.recentKeys = loadKeyList("recentChannels")
+    rebuildRecentIndex()
+    m.mainChannels = []
+    ' Listas M3U externas adicionadas pelo utilizador.
+    m.extraPlaylists = []
+    m.extraChannels = []
+    m.extraPending = false
+    m.extraIndex = 0
+    m.extraQueue = []
+    m.extraEditIndex = -1
+    m.portugalChannels = []
+    m.portugalLastSync = Val(readSetting("portugalLastSync"))
+    m.portugalInitPending = false
+    m.portugalLoading = false
+    m.portugalNotify = false
+    m.epgUnsupported = readSetting("epgUnsupported") = "1"
+    m.groups = []
+    m.visibleChannels = []
+    m.orderedChannels = []
+    m.movies = []
+    m.movieRows = []
+    m.vodAll = []
+    m.vodMovies = []
+    m.vodSeries = []
+    m.vodVisibleItems = []
+    m.vodFilter = "all"
+    m.seriesDetail = invalid
+    m.seriesReturnFilter = "all"
+    m.seriesDetailReturnView = "vod"
+    m.seriesDetailReturnIndex = 0
+    m.seriesAllEpisodes = []
+    m.seriesSeasonValues = []
+    m.seriesCurrentSeason = 0
+    m.detailItem = invalid
+    m.detailIsSeries = false
+    m.detailActionEntries = []
+    m.detailReturnView = "vod"
+    m.detailReturnIndex = 0
+    m.detailReturnFilter = "all"
+    m.pendingSaimoDetail = invalid
+    m.pendingSaimoDetailReturnView = "saimo_home"
+    m.pendingSaimoDetailReturnIndex = 0
+    m.pendingSaimoDetailReturnFilter = "all"
+    m.favoriteReturnView = "channels"
+    m.favoriteReturnFilter = "all"
+    m.vodLoaded = false
+    m.vodRefreshing = false
+    m.vodInitPending = false
+    m.vodLastSync = Val(readSetting("vodLastSync"))
+    m.playlistLastSync = Val(readSetting("playlistLastSync"))
+    m.extraPlaylists = loadExtraPlaylists()
+    m.playlistNotify = false
+    m.saimoIndexLetters = []
+    m.saimoBases = {}
+    m.saimoCovers = {}
+    m.saimoHighlights = []
+    m.saimoShelves = []
+    m.shelfRows = []
+    m.saimoIndexLoaded = false
+    m.saimoIndexSignature = ""
+    m.saimoBase = ""
+    m.saimoCurrentLetter = ""
+    m.saimoCurrentItems = []
+    m.saimoReturnFilter = "all"
+    m.saimoBackToHome = false
+    m.pendingSaimoLetter = ""
+    m.pendingSaimoSeries = invalid
+    m.saimoPendingFocusTitle = ""
+    m.saimoPendingFocusType = ""
+    m.saimoSearchEntries = []
+    m.pendingSaimoSearch = ""
+    m.pendingSaimoSearchEntries = []
+    m.pendingVodFilter = "movies"
+    m.navEntries = []
+    m.listEntries = []
+    m.settingsEntries = []
+    m.guideChannels = []
+    m.favorites = {}
+    m.favoriteTitles = []
+    m.vodFavoritesByKey = {}
+    m.vodFavoriteItems = []
+    m.epg = {}
+    m.epgLoaded = false
+    m.epgTask = invalid
+
+    m.activeView = "channels"
+    m.selectedGroup = ""
+    m.searchActive = false
+    m.searchReturnView = "channels"
+    m.movieLoading = false
+    m.playlistLoading = false
+    m.pendingMovie = invalid
+    m.pendingMoviesOpen = false
+
+    m.fetchTask = invalid
+    m.fetchKind = ""
+    m.dialog = invalid
+    m.editDialog = invalid
+    m.editKey = ""
+
+    m.playerVisible = false
+    m.currentChannel = invalid
+    m.currentSources = []
+    m.currentSourceIndex = 0
+    m.currentIsLive = true
+    m.switchingSource = false
+    m.allSourcesFailed = false
+
+    m.settingsVisible = false
+    m.guideVisible = false
+    m.aboutVisible = false
+
+    loadFavorites()
+    loadVodFavorites()
+
+    m.navList.observeField("itemSelected", "onNavSelected")
+    m.channelGrid.observeField("itemSelected", "onChannelSelected")
+    m.channelGrid.observeField("itemFocused", "onChannelFocused")
+    m.itemList.observeField("itemSelected", "onItemSelected")
+    m.vodGrid.observeField("itemSelected", "onVodItemSelected")
+    m.vodGrid.observeField("itemFocused", "onVodItemFocused")
+    m.episodeGrid.observeField("itemSelected", "onVodItemSelected")
+    m.episodeGrid.observeField("itemFocused", "onVodItemFocused")
+    m.vodDetailActions.observeField("itemSelected", "onVodDetailActionSelected")
+    m.vodSeasonList.observeField("itemFocused", "onSeriesSeasonFocused")
+    m.shelfList.observeField("rowItemSelected", "onShelfItemSelected")
+    m.shelfList.observeField("rowItemFocused", "onShelfItemFocused")
+    m.settingsList.observeField("itemSelected", "onSettingsSelected")
+    m.settingsList.observeField("itemFocused", "onSettingsFocused")
+    m.guideList.observeField("itemSelected", "onGuideSelected")
+
+    m.video.observeField("state", "onVideoState")
+
+    m.toastTimer.observeField("fire", "hideToast")
+    m.failoverTimer.observeField("fire", "onFailoverTimer")
+    m.progressTimer.observeField("fire", "onProgressTimer")
+    m.playerAutoHideTimer.observeField("fire", "hidePlayerOverlay")
+    m.progressTimer.control = "start"
+    m.vodRefreshTimer.observeField("fire", "onVodRefreshTimer")
+
+    buildNav(false)
+    updateChrome()
+    m.top.setFocus(true)
+    m.navList.setFocus(true)
+
+    ' Primeira execucao: abre o catalogo publico por padrao. URLs customizadas
+    ' continuam preservadas; somente os hosts antigos conhecidos sao migrados.
+    lowPlaylist = LCase(m.playlistUrl)
+    if m.playlistUrl = "" or Instr(1, lowPlaylist, "canais-saimo.pages.dev") > 0 then
+        m.playlistUrl = m.publicCatalog
+        writeSetting("playlistUrl", m.playlistUrl)
+    end if
+
+    loadCachedPlaylist()
+    loadCachedPortugal()
+    loadCachedVodCatalog()
+    print "SAIMO init: canais=" + Str(m.channels.Count()).Trim() + " grupos=" + Str(m.groups.Count()).Trim()
+    m.vodRefreshTimer.control = "start"
+    runScheduledSync()
+    if m.epgUrl <> "" then loadEpg()
+end sub

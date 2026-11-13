@@ -13,6 +13,6 @@
         <Label id="chipText" translation="[11, 1]" width="165" height="53"
                font="dictionary:chipFont" color="0xA8B4C0FF" horizAlign="center" vertAlign="center" />
     </children>
-    <script type="text/brightscript" uri="pkg:/source/bslib.brs" />
-    <script type="text/brightscript" uri="pkg:/components/SeasonChip.brs" />
+    <script type="text/brightscript" uri="pkg:/source/core.bs" />
+    <script type="text/brightscript" uri="pkg:/components/SeasonChip.bs" />
 </component>

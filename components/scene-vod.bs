@@ -1,0 +1,980 @@
+' ---------------------------------------------------------------------------
+' Parte da cena principal: Filmes e series do catalogo.
+' O ficheiro MainScene.bs guarda o ciclo de vida e o estado; este corre no
+' mesmo ambito de componente (as scripts do MainScene.xml partilham o escopo).
+' ---------------------------------------------------------------------------
+
+sub openMovies()
+    openVod("movies")
+end sub
+
+sub openSeries()
+    openVod("series")
+end sub
+
+sub openCatalog()
+    openVod("all")
+end sub
+
+sub openVodHome(filter as string)
+    if isSaimoVodUrl(m.vodUrl) then
+        showSaimoHome(filter)
+        if not m.saimoIndexLoaded and m.fetchTask = invalid then refreshVodCatalog(false)
+    else
+        openVod(filter)
+    end if
+end sub
+
+sub openVod(filter as string)
+    if filter <> "movies" and filter <> "series" then filter = "all"
+    if m.fetchTask <> invalid and m.fetchKind = "playlist" then
+        m.pendingMoviesOpen = true
+        m.pendingVodFilter = filter
+        m.activeView = "vod"
+        setViewHeader("CATÁLOGO", "Filmes e séries", "Aguardando a lista de canais terminar...")
+        m.emptyLabel.text = "O catálogo abrirá assim que o carregamento atual terminar."
+        m.emptyLabel.visible = true
+        showToast("Aguarde; o catálogo será aberto em seguida.")
+        return
+    end if
+
+    if m.fetchTask <> invalid and m.fetchKind <> "vod_catalog" and m.fetchKind <> "saimo_index" then
+        showToast("Aguarde o carregamento atual terminar.")
+        return
+    end if
+
+    m.vodFilter = filter
+    m.seriesDetail = invalid
+    if isSaimoVodUrl(m.vodUrl) then
+        m.saimoReturnFilter = filter
+        showSaimoLetters(filter)
+        if not m.saimoIndexLoaded and m.fetchTask = invalid then refreshVodCatalog(false)
+        return
+    end if
+    if m.vodLoaded then
+        showVod(filter)
+        if vodIsStale() and m.fetchTask = invalid then refreshVodCatalog(false)
+        return
+    end if
+
+    m.activeView = "vod"
+    m.searchActive = false
+    setViewHeader("CATÁLOGO", vodTitleForFilter(filter), vodSyncLabel())
+    m.itemList.visible = false
+    m.vodGrid.visible = true
+    m.episodeGrid.visible = false
+    m.emptyLabel.visible = true
+    if m.vodUrl = "" then
+        m.emptyLabel.text = "Para carregar o catálogo completo, abra Ajustes e informe a URL M3U/M3U8 de filmes e séries que você tem permissão para acessar.\n\nO app verifica novidades a cada 15 minutos e baixa o catálogo quando o cache tem mais de 6 horas."
+        m.listSub.text = "Nenhuma fonte VOD configurada"
+    else
+        m.emptyLabel.text = "Carregando o catálogo... os títulos em cache aparecerão primeiro quando estiverem disponíveis."
+        if m.fetchTask = invalid then refreshVodCatalog(false)
+    end if
+    m.navList.setFocus(true)
+end sub
+
+sub showVodFavorites()
+    m.activeView = "vod_favorites"
+    m.seriesDetail = invalid
+    m.vodVisibleItems = m.vodFavoriteItems
+    m.searchActive = false
+    m.itemList.visible = false
+    m.vodGrid.visible = true
+    m.episodeGrid.visible = false
+    m.shelfList.visible = false
+    setViewHeader("FAVORITOS", "Seus filmes e séries", Str(m.vodFavoriteItems.Count()).Trim() + " títulos salvos  •  OK abre os detalhes")
+    m.emptyLabel.visible = m.vodFavoriteItems.Count() = 0
+    if m.vodFavoriteItems.Count() = 0 then
+        m.emptyLabel.text = "Sua lista de favoritos está vazia." + Chr(10) + Chr(10) + "Abra os detalhes de um filme ou série e selecione Favorito para salvar."
+        m.vodGrid.content = CreateObject("roSGNode", "ContentNode")
+        m.navList.setFocus(true)
+        return
+    end if
+    buildVodGrid(m.vodFavoriteItems)
+    m.emptyLabel.visible = false
+    m.vodGrid.setFocus(true)
+end sub
+
+function vodTitleForFilter(filter as string) as string
+    if filter = "movies" then return "Filmes"
+    if filter = "series" then return "Séries e episódios"
+    return "Catálogo completo"
+end function
+
+sub handleVodCatalogResult(task as object)
+    m.vodRefreshing = false
+    ' Nunca grava uma resposta antiga sob a URL VOD atual.
+    if task.url.Trim() <> m.vodUrl then
+        if m.vodUrl <> "" then refreshVodCatalog(false)
+        return
+    end if
+    if task.success <> true then
+        message = strField(task, "error")
+        if message = "" then message = "Não foi possível atualizar o catálogo."
+        m.status.text = message
+        showToastType(message, "error")
+        if m.activeView = "vod" and not m.vodLoaded then
+            m.emptyLabel.text = message + Chr(10) + Chr(10) + "Confira a URL M3U em Ajustes."
+            m.emptyLabel.visible = true
+            m.listSub.text = "Falha na sincronização; cache preservado"
+        else if m.vodLoaded then
+            m.listSub.text = Str(m.vodAll.Count()).Trim() + " títulos  •  cache preservado"
+        end if
+        return
+    end if
+
+    parsed = ParseJson(task.resultJson)
+    if type(parsed) <> "roArray" or parsed.Count() = 0 then
+        showToastType("O catálogo retornou dados vazios; o cache foi preservado.", "error")
+        return
+    end if
+
+    m.vodAll = parsed
+    rebuildVodIndexes()
+    m.vodLoaded = true
+    saveVodCache(task.resultJson)
+    clock = CreateObject("roDateTime")
+    m.vodLastSync = clock.AsSeconds()
+    writeSetting("vodLastSync", Str(m.vodLastSync).Trim())
+    m.status.text = Str(m.vodAll.Count()).Trim() + " títulos sincronizados."
+    showToastType(Str(m.vodAll.Count()).Trim() + " títulos no catálogo atualizados.", "success")
+
+    if m.activeView = "vod" then
+        showVod(m.vodFilter)
+    else if m.activeView = "vod_episodes" and m.seriesDetail <> invalid then
+        title = m.seriesDetail.title
+        for each series in m.vodSeries
+            if LCase(series.title) = LCase(title) then
+                m.seriesDetail = series
+                exit for
+            end if
+        end for
+        showSeriesEpisodes(m.seriesDetail, m.seriesDetailReturnView, m.seriesDetailReturnIndex)
+    end if
+end sub
+
+sub handleSaimoIndexResult(task as object)
+    m.vodRefreshing = false
+    base = saimoBaseUrl(m.vodUrl)
+    if saimoBaseUrl(strField(task, "baseUrl")) <> base then
+        if m.vodUrl <> "" then refreshVodCatalog(false)
+        return
+    end if
+    if task.success <> true then
+        message = strField(task, "error")
+        if message = "" then message = "Não foi possível atualizar o índice do catálogo."
+        m.status.text = message
+        if not m.saimoIndexLoaded and (m.activeView = "saimo_letters" or m.activeView = "saimo_home") then
+            m.emptyLabel.text = message + Chr(10) + Chr(10) + "O cache será preservado e o app tentará novamente quando houver conexão."
+            m.emptyLabel.visible = true
+            m.listSub.text = "Catálogo temporariamente indisponível"
+        end if
+        if m.saimoIndexLoaded then showToast("Catálogo offline: usando índice em cache.") else showToastType(message, "error")
+        return
+    end if
+
+    parsed = ParseJson(task.resultJson)
+    if type(parsed) <> "roAssociativeArray" or type(parsed.letters) <> "roArray" or parsed.letters.Count() = 0 then
+        showToastType("O índice recebido não é válido; o cache foi preservado.", "error")
+        return
+    end if
+
+    newSignature = strField(parsed, "signature")
+    if newSignature = "" then newSignature = saimoIndexSignature(parsed.letters, parsed.bases)
+    indexChanged = newSignature <> m.saimoIndexSignature
+    if indexChanged then invalidateSaimoDerivedCaches()
+
+    m.saimoIndexLetters = parsed.letters
+    if type(parsed.bases) = "roAssociativeArray" then m.saimoBases = parsed.bases
+    if type(parsed.covers) = "roAssociativeArray" then m.saimoCovers = parsed.covers
+    if type(parsed.highlights) = "roArray" then m.saimoHighlights = parsed.highlights
+    if type(parsed.shelves) = "roArray" then m.saimoShelves = parsed.shelves
+    m.saimoIndexSignature = newSignature
+    m.saimoBase = base
+    m.saimoIndexLoaded = true
+    saveSaimoIndex(task.resultJson)
+
+    clock = CreateObject("roDateTime")
+    m.vodLastSync = clock.AsSeconds()
+    writeSetting("vodLastSync", Str(m.vodLastSync).Trim())
+    m.status.text = Str(m.saimoIndexLetters.Count()).Trim() + " letras sincronizadas; catálogo atualizado."
+
+    if m.activeView = "saimo_letters" then
+        hadListFocus = m.itemList.hasFocus()
+        focusIndex = m.itemList.itemFocused
+        showSaimoLetters(m.vodFilter)
+        if focusIndex > 0 and focusIndex < m.listEntries.Count() then m.itemList.jumpToItem = focusIndex
+        if not hadListFocus then m.navList.setFocus(true)
+    else if m.activeView = "saimo_home" then
+        hadGridFocus = m.vodGrid.hasFocus()
+        focusIndex = m.vodGrid.itemFocused
+        showSaimoHome(m.vodFilter)
+        if focusIndex > 0 and focusIndex < m.vodVisibleItems.Count() then m.vodGrid.jumpToItem = focusIndex
+        if not hadGridFocus then m.navList.setFocus(true)
+    else if indexChanged and m.activeView = "saimo_catalog" and m.saimoCurrentLetter <> "" then
+        loadSaimoLetter(m.saimoCurrentLetter)
+    end if
+end sub
+
+sub showSaimoHome(filter as string)
+    if filter <> "movies" and filter <> "series" then filter = "all"
+    if not m.saimoIndexLoaded then
+        m.activeView = "saimo_home"
+        m.vodFilter = filter
+        m.itemList.visible = false
+        m.vodGrid.visible = false
+        m.episodeGrid.visible = false
+        setViewHeader("DESCOBRIR", "Descubra filmes e séries", "Sincronizando o catálogo público...")
+        m.emptyLabel.text = "Estamos carregando os destaques do catálogo." + Chr(10) + Chr(10) + "Assim que o índice estiver disponível, esta tela mostrará títulos em destaque. Você também pode usar Catálogo A-Z para navegar por letra."
+        m.emptyLabel.visible = true
+        m.navList.setFocus(true)
+        return
+    end if
+
+    featured = pickSaimoHighlights(m.saimoHighlights, filter, 12)
+
+    if m.saimoShelves.Count() > 0 then
+        showSaimoShelves(filter)
+        return
+    end if
+
+    if featured.Count() = 0 then
+        showSaimoLetters(filter)
+        showToast("Destaques indisponíveis; abrindo o catálogo por letra.")
+        return
+    end if
+
+    m.activeView = "saimo_home"
+    m.vodFilter = filter
+    m.seriesDetail = invalid
+    m.searchActive = false
+    m.vodVisibleItems = featured
+    m.saimoCurrentItems = featured
+    m.itemList.visible = false
+    m.vodGrid.visible = true
+    m.episodeGrid.visible = false
+    subText = Str(featured.Count()).Trim() + " destaques  •  filmes e séries  •  use Catálogo A-Z para explorar"
+    setViewHeader("DESCOBRIR", "Em alta agora", subText)
+    ' A grade ocupa a área livre ao lado da navegação.
+    m.vodGrid.numColumns = 3
+    ' Duas fileiras ficam visíveis; a terceira entra com a navegação vertical.
+    ' Isso evita que os cartões invadam a barra inferior de status em 1080p.
+    m.vodGrid.numRows = 2
+    m.emptyLabel.visible = false
+    buildVodGrid(featured)
+    if featured.Count() > 0 then onVodItemFocused()
+    if m.hint <> invalid then m.hint.text = "Setas navegam  •  OK abre o título no catálogo  •  Replay busca  •  Back retorna"
+    m.vodGrid.setFocus(true)
+end sub
+
+sub showSaimoShelves(filter as string)
+    root = CreateObject("roSGNode", "ContentNode")
+    m.shelfRows = []
+    for each shelf in m.saimoShelves
+        rowItems = []
+        if type(shelf.items) <> "roArray" then continue for
+        for each entry in shelf.items
+            entryType = strField(entry, "type")
+            if filter = "movies" and entryType <> "movie" then continue for
+            if filter = "series" and entryType <> "series" then continue for
+            rowItems.Push(entry)
+        end for
+        if rowItems.Count() = 0 then continue for
+        rowTitle = strField(shelf, "title")
+        row = root.CreateChild("ContentNode")
+        row.title = rowTitle
+        for each entry in rowItems
+            card = row.CreateChild("ContentNode")
+            card.title = strField(entry, "title")
+            poster = strField(entry, "cover")
+            if poster = "" then poster = "pkg:/images/placeholder.png"
+            card.hdPosterUrl = poster
+        end for
+        m.shelfRows.Push({ title: rowTitle, items: rowItems })
+    end for
+
+    m.activeView = "saimo_home"
+    m.vodFilter = filter
+    m.seriesDetail = invalid
+    m.searchActive = false
+    m.vodVisibleItems = []
+    m.saimoCurrentItems = []
+    m.itemList.visible = false
+    m.vodGrid.visible = false
+    m.episodeGrid.visible = false
+    m.shelfList.visible = true
+    m.shelfList.content = root
+    setViewHeader("DESCOBRIR", "Descubra filmes e séries", Str(m.shelfRows.Count()).Trim() + " fileiras editoriais  •  ↑ ↓ percorre as fileiras")
+    m.shelfList.visible = m.shelfRows.Count() > 0
+    m.emptyLabel.visible = m.shelfRows.Count() = 0
+    if m.shelfRows.Count() = 0 then
+        m.emptyLabel.text = "Não há títulos nesta seleção. Escolha outra categoria."
+        m.navList.setFocus(true)
+        return
+    end if
+    titles = ""
+    for each shelfRow in m.shelfRows
+        titles = titles + shelfRow.title + " | "
+    end for
+    print "SAIMO_DESCOBRIR fileiras=" + Str(m.shelfRows.Count()).Trim() + " [" + titles + "]"
+    if m.hint <> invalid then m.hint.text = "↑ ↓ percorre fileiras  •  ‹ › percorre títulos  •  OK abre  •  Replay busca"
+    m.shelfList.setFocus(true)
+end sub
+
+sub onShelfItemFocused()
+    focus = m.shelfList.rowItemFocused
+    if type(focus) <> "roArray" or focus.Count() < 2 then return
+    rowIndex = focus[0]
+    itemIndex = focus[1]
+    if rowIndex < 0 or rowIndex >= m.shelfRows.Count() then return
+    row = m.shelfRows[rowIndex]
+    if itemIndex < 0 or itemIndex >= row.items.Count() then return
+    entry = row.items[itemIndex]
+    title = strField(entry, "title")
+    itemType = LCase(strField(entry, "type"))
+    eyebrow = "FILME"
+    if itemType = "series" then eyebrow = "SÉRIE"
+    m.listEyebrow.text = row.title + "  •  " + eyebrow
+    m.listTitle.text = title
+    m.listSub.text = saimoItemSubtitle(entry) + "  •  OK abre"
+end sub
+
+sub onShelfItemSelected()
+    selection = m.shelfList.rowItemSelected
+    if type(selection) <> "roArray" or selection.Count() < 2 then return
+    rowIndex = selection[0]
+    itemIndex = selection[1]
+    if rowIndex < 0 or rowIndex >= m.shelfRows.Count() then return
+    row = m.shelfRows[rowIndex]
+    if itemIndex < 0 or itemIndex >= row.items.Count() then return
+    entry = row.items[itemIndex]
+    openSaimoEntry(entry, "saimo_home", itemIndex)
+end sub
+
+sub showSaimoLetters(filter as string)
+    if filter <> "movies" and filter <> "series" then filter = "all"
+    m.saimoBackToHome = false
+    m.activeView = "saimo_letters"
+    m.vodFilter = filter
+    m.saimoReturnFilter = filter
+    m.searchActive = false
+    m.itemList.visible = true
+    m.channelGrid.visible = false
+    m.vodGrid.visible = false
+    m.episodeGrid.visible = false
+    setViewHeader("CATÁLOGO", vodTitleForFilter(filter) + "  •  A–Z", "")
+    m.listEntries = []
+
+    for each row in m.saimoIndexLetters
+        movies = Val(strField(row, "moviesCount"))
+        series = Val(strField(row, "seriesCount"))
+        include = false
+        if filter = "movies" and movies > 0 then include = true
+        if filter = "series" and series > 0 then include = true
+        if filter = "all" and (movies > 0 or series > 0) then include = true
+        if include then m.listEntries.Push({ kind: "saimo_letter", data: row })
+    end for
+
+    if m.saimoIndexLoaded and m.listEntries.Count() = 0 and m.saimoIndexLetters.Count() > 0 then
+        ' Algumas versoes do indice publicam a letra sem contagens compativeis.
+        ' Nao deixe a tela presa em "carregando": permita abrir a letra e ler o fragmento.
+        for each row in m.saimoIndexLetters
+            m.listEntries.Push({ kind: "saimo_letter", data: row })
+        end for
+        m.listSub.text = Str(m.listEntries.Count()).Trim() + " letras  •  contagens indisponíveis; selecione uma letra"
+        m.emptyLabel.visible = false
+    else if not m.saimoIndexLoaded then
+        m.listSub.text = "Obtendo índice do catálogo..."
+        m.emptyLabel.text = "Carregando o índice do catálogo." + Chr(10) + Chr(10) + "Os títulos são baixados por letra para manter a interface rápida."
+        m.emptyLabel.visible = true
+    else if m.listEntries.Count() = 0 then
+        m.listSub.text = "Nenhuma letra tem títulos para este filtro. Use Replay para tentar novamente."
+        m.emptyLabel.text = "O índice foi carregado, mas não informa títulos para este filtro." + Chr(10) + Chr(10) + "Pressione Replay para sincronizar novamente ou volte e tente Filmes e Séries."
+        m.emptyLabel.visible = true
+    else
+        m.listSub.text = Str(m.listEntries.Count()).Trim() + " letras  •  selecione uma letra  •  OK abre"
+        m.emptyLabel.visible = false
+    end if
+    renderEntries(true)
+    if m.listEntries.Count() > 0 then
+        m.itemList.setFocus(true)
+    else
+        m.navList.setFocus(true)
+    end if
+    if m.hint <> invalid then m.hint.text = "Setas navegam  •  OK abre a letra  •  Replay busca o catálogo completo  •  Back retorna"
+end sub
+
+sub loadSaimoLetter(letter as string)
+    if letter = "" then return
+    if m.fetchTask <> invalid then
+        m.pendingSaimoLetter = letter
+        showToast("Aguarde a requisição atual terminar; esta letra será aberta em seguida.")
+        return
+    end if
+
+    m.saimoCurrentLetter = letter
+    m.activeView = "saimo_catalog"
+    m.itemList.visible = false
+    m.vodGrid.visible = true
+    m.episodeGrid.visible = false
+    setViewHeader("CATÁLOGO", vodTitleForFilter(m.vodFilter) + "  •  " + letter, "Carregando títulos...  •  OK abre  •  Back volta às letras")
+    m.emptyLabel.visible = false
+    m.navList.setFocus(true)
+    showLoadProgress("A carregar os títulos da letra " + letter + "...")
+
+    cachedUrl = readCacheAscii("cachefs:/saimo_vod_letters.url")
+    cachePath = saimoLetterCachePath(m.vodFilter, letter)
+    raw = readCacheAscii(cachePath)
+    currentMarker = saimoLetterCacheMarker(saimoBaseUrl(m.vodUrl), m.saimoIndexSignature)
+    if isStringValue(cachedUrl) and cachedUrl.Trim() = currentMarker and isStringValue(raw) and raw <> "" then
+        parsedCache = ParseJson(raw)
+        if type(parsedCache) = "roAssociativeArray" and type(parsedCache.items) = "roArray" and parsedCache.items.Count() > 0 then
+            showSaimoGrid(parsedCache.items)
+            if m.saimoPendingFocusTitle <> "" then focusSaimoTitle(m.saimoPendingFocusTitle, m.saimoPendingFocusType)
+            m.listSub.text = Str(parsedCache.items.Count()).Trim() + " títulos  •  cache local  •  atualizando..."
+        end if
+    end if
+
+    if m.fetchTask = invalid then
+        base = saimoBaseUrl(m.vodUrl)
+        if not startFetch("saimo_letter", base, base, letter, m.vodFilter, m.saimoIndexSignature) then return
+        m.status.text = "Baixando fragmentos da letra " + letter + "..."
+    else
+        m.pendingSaimoLetter = letter
+    end if
+end sub
+
+sub handleSaimoLetterResult(task as object)
+    if saimoBaseUrl(strField(task, "baseUrl")) <> saimoBaseUrl(m.vodUrl) then return
+    if task.success <> true then
+        hideLoadProgress()
+        if m.pendingSaimoDetail <> invalid and strField(m.pendingSaimoDetail, "letter") = strField(task, "letter") then
+            m.pendingSaimoDetail = invalid
+        end if
+        message = strField(task, "error")
+        if message = "" then message = "Não foi possível atualizar esta letra."
+        m.status.text = message
+        if m.activeView = "saimo_catalog" and m.saimoCurrentItems.Count() = 0 then
+            m.emptyLabel.text = message + Chr(10) + Chr(10) + "Tente novamente quando a conexão estiver disponível."
+            m.emptyLabel.visible = true
+        else
+            showToastType("Atualização falhou; mantendo os títulos em cache.", "error")
+        end if
+        return
+    end if
+
+    parsed = ParseJson(task.resultJson)
+    if type(parsed) <> "roAssociativeArray" or type(parsed.items) <> "roArray" then
+        hideLoadProgress()
+        return
+    end if
+    items = parsed.items
+    if items.Count() = 0 then
+        hideLoadProgress()
+        return
+    end if
+    hideLoadProgress()
+
+    cachePath = saimoLetterCachePath(strField(parsed, "filter"), strField(parsed, "letter"))
+    WriteAsciiFile(cachePath, task.resultJson)
+    WriteAsciiFile("cachefs:/saimo_vod_letters.url", saimoLetterCacheMarker(saimoBaseUrl(m.vodUrl), m.saimoIndexSignature))
+
+    if m.pendingSaimoDetail <> invalid and strField(parsed, "letter") = strField(m.pendingSaimoDetail, "letter") then
+        pendingItem = m.pendingSaimoDetail
+        pendingReturnView = m.pendingSaimoDetailReturnView
+        pendingReturnIndex = m.pendingSaimoDetailReturnIndex
+        pendingReturnFilter = m.pendingSaimoDetailReturnFilter
+        m.pendingSaimoDetail = invalid
+        m.saimoCurrentItems = items
+        match = invalid
+        for each candidate in items
+            if LCase(strField(candidate, "type")) = LCase(strField(pendingItem, "type")) and movieTitleMatches(strField(candidate, "title"), strField(pendingItem, "title")) then
+                match = candidate
+                exit for
+            end if
+        end for
+        if match <> invalid then
+            if LCase(strField(match, "type")) = "series" then
+                m.seriesDetailReturnView = pendingReturnView
+                m.seriesDetailReturnIndex = pendingReturnIndex
+                m.seriesReturnFilter = pendingReturnFilter
+                loadSaimoEpisodes(match)
+            else
+                m.vodFilter = pendingReturnFilter
+                showVodMovieDetails(match, pendingReturnView, pendingReturnIndex)
+            end if
+            return
+        end if
+        ' O titulo sumiu do catalogo entre o destaque e a letra. Dizer isso e
+        ' melhor do que abrir a grade em silencio e deixar o usuario perdido.
+        showToastType("Este título não está mais disponível no catálogo.", "error")
+    end if
+
+    if strField(parsed, "letter") = m.saimoCurrentLetter and strField(parsed, "filter") = m.vodFilter and (m.activeView = "saimo_catalog" or m.activeView = "saimo_episodes_loading") then
+        showSaimoGrid(items)
+        if m.saimoPendingFocusTitle <> "" then focusSaimoTitle(m.saimoPendingFocusTitle, m.saimoPendingFocusType)
+    end if
+    m.status.text = Str(items.Count()).Trim() + " títulos carregados da letra " + strField(parsed, "letter") + "."
+    print "SAIMO letra " + strField(parsed, "letter") + ": " + Str(items.Count()).Trim() + " titulos"
+    if strField(task, "error") <> "" then showToastType(strField(task, "error"), "error")
+end sub
+
+sub showSaimoGrid(items as object)
+    m.activeView = "saimo_catalog"
+    m.vodGrid.itemSize = [140, 252]
+    m.vodGrid.numColumns = 6
+    m.vodGrid.numRows = 2
+    m.saimoCurrentItems = items
+    m.vodVisibleItems = items
+    m.itemList.visible = false
+    m.vodGrid.visible = true
+    m.episodeGrid.visible = false
+    setViewHeader("CATÁLOGO", vodTitleForFilter(m.vodFilter) + "  •  " + m.saimoCurrentLetter, Str(items.Count()).Trim() + " títulos  •  capas carregadas automaticamente  •  OK abre")
+    m.emptyLabel.visible = items.Count() = 0
+    if items.Count() = 0 then
+        m.emptyLabel.text = "Nenhum título disponível para esta letra."
+        m.vodGrid.content = CreateObject("roSGNode", "ContentNode")
+        m.navList.setFocus(true)
+        return
+    end if
+    buildVodGrid(items)
+    m.emptyLabel.visible = false
+    m.vodGrid.setFocus(true)
+    if m.hint <> invalid then m.hint.text = "Setas navegam  •  OK abre ou reproduz  •  Back volta às letras  •  Replay busca"
+end sub
+
+sub focusSaimoTitle(title as string, kind as string)
+    if title = "" or m.vodVisibleItems.Count() = 0 then return
+    idx = 0
+    for each entry in m.vodVisibleItems
+        if movieTitleMatches(strField(entry, "title"), title) then
+            if kind = "" or strField(entry, "type") = kind then
+                m.vodGrid.jumpToItem = idx
+                m.saimoPendingFocusTitle = ""
+                m.saimoPendingFocusType = ""
+                return
+            end if
+        end if
+        idx = idx + 1
+    end for
+    m.saimoPendingFocusTitle = ""
+    m.saimoPendingFocusType = ""
+    showToast("O destaque não apareceu na lista atualizada; use a busca para encontrá-lo.")
+end sub
+
+sub loadSaimoEpisodes(series as object)
+    if series = invalid then return
+    if m.fetchTask <> invalid then
+        m.pendingSaimoSeries = series
+        showToast("Carregando os episódios assim que a tarefa atual terminar.")
+        return
+    end if
+    m.seriesDetail = series
+    m.activeView = "saimo_episodes_loading"
+    showSeriesDetailLoading(series)
+    base = saimoBaseUrl(m.vodUrl)
+    letter = strField(series, "letter")
+    fileLetter = letter
+    if letter = "#" then fileLetter = "%23"
+    piece = Str(Val(strField(series, "piece"))).Trim()
+    url = base + "series-" + fileLetter + "-" + piece + ".txt"
+    startFetch("saimo_episodes", url, base, letter, strField(series, "title"), "")
+end sub
+
+sub handleSaimoEpisodesResult(task as object)
+    if saimoBaseUrl(strField(task, "baseUrl")) <> saimoBaseUrl(m.vodUrl) then return
+    hideLoadProgress()
+    if task.success <> true then
+        message = strField(task, "error")
+        if message = "" then message = "Não foi possível carregar os episódios."
+        m.vodEpisodeEmpty.text = message + Chr(10) + Chr(10) + "Back retorna ao catálogo; OK seleciona uma ação da série."
+        m.vodEpisodeEmpty.visible = true
+        m.vodDetailActions.setFocus(true)
+        showToastType(message, "error")
+        return
+    end if
+    episodes = ParseJson(task.resultJson)
+    if type(episodes) <> "roArray" or episodes.Count() = 0 then
+        m.vodEpisodeEmpty.text = "Nenhum episódio encontrado para esta série."
+        m.vodEpisodeEmpty.visible = true
+        return
+    end if
+    cover = strField(m.seriesDetail, "cover")
+    for each episode in episodes
+        if strField(episode, "cover") = "" then episode.cover = cover
+    end for
+    showSaimoEpisodes(episodes)
+end sub
+
+sub showSaimoEpisodes(episodes as object)
+    showSeriesDetails(m.seriesDetail, episodes, "saimo_episodes", m.seriesDetailReturnView, m.seriesDetailReturnIndex)
+end sub
+
+sub showSeriesDetailLoading(series as object)
+    m.detailItem = series
+    m.detailIsSeries = true
+    m.seriesAllEpisodes = []
+    m.seriesSeasonValues = []
+    m.vodVisibleItems = []
+    m.itemList.visible = false
+    m.vodGrid.visible = false
+    m.episodeGrid.visible = false
+    m.shelfList.visible = false
+    m.emptyLabel.visible = false
+    m.vodSeasonHeading.visible = false
+    m.vodSeasonList.visible = false
+    m.vodEpisodeEmpty.text = "Consultando temporadas e episódios..."
+    m.vodEpisodeEmpty.visible = true
+    setViewHeader("SÉRIE", strField(series, "title"), "Informações da série  •  carregando temporadas...")
+    showLoadProgress("A carregar os episodios da serie...")
+    updateVodDetailContent(series)
+    renderVodDetailActions(series, true)
+    m.vodDetailGroup.visible = true
+    m.vodDetailActions.setFocus(true)
+end sub
+
+sub showSeriesDetails(series as object, episodes as object, view as string, returnView as string, returnIndex as integer)
+    if series = invalid then return
+    if type(episodes) <> "roArray" then episodes = []
+    m.seriesDetail = series
+    m.seriesDetailReturnView = returnView
+    m.seriesDetailReturnIndex = returnIndex
+    m.seriesAllEpisodes = episodes
+    m.detailItem = series
+    m.detailIsSeries = true
+    m.activeView = view
+    m.vodVisibleItems = []
+    m.itemList.visible = false
+    m.vodGrid.visible = false
+    m.shelfList.visible = false
+    m.emptyLabel.visible = false
+    m.episodeGrid.visible = episodes.Count() > 0
+    m.vodEpisodeEmpty.visible = episodes.Count() = 0
+    if episodes.Count() = 0 then
+        m.vodEpisodeEmpty.text = "Esta fonte ainda não disponibilizou episódios para a série."
+    end if
+    setViewHeader("SÉRIE", strField(series, "title"), "Detalhes da série  •  escolha uma temporada e um episódio")
+    updateVodDetailContent(series)
+    if episodes.Count() > 0 then series.episodeCount = episodes.Count()
+    m.vodDetailMeta.text = vodDetailsMeta(series)
+    renderVodDetailActions(series, true)
+    m.vodDetailGroup.visible = true
+    buildSeriesSeasonList(episodes)
+    if m.seriesSeasonValues.Count() > 1 then
+        m.vodSeasonHeading.text = "TEMPORADAS"
+        m.vodSeasonHeading.visible = true
+        m.vodSeasonList.visible = true
+        m.vodSeasonList.setFocus(true)
+    else if m.seriesSeasonValues.Count() = 1 then
+        m.vodSeasonHeading.text = "TEMPORADA " + Str(m.seriesSeasonValues[0]).Trim()
+        m.vodSeasonHeading.visible = true
+        m.vodSeasonList.visible = false
+        m.vodVisibleItems = episodesForSeason(episodes, m.seriesSeasonValues[0])
+        buildEpisodeGrid(m.vodVisibleItems)
+        if m.vodVisibleItems.Count() > 0 then m.episodeGrid.setFocus(true) else m.vodDetailActions.setFocus(true)
+    else
+        m.vodSeasonHeading.visible = false
+        m.vodSeasonList.visible = false
+        if episodes.Count() > 0 then
+            m.vodVisibleItems = episodes
+            buildEpisodeGrid(episodes)
+            m.episodeGrid.setFocus(true)
+        else
+            m.vodDetailActions.setFocus(true)
+        end if
+    end if
+end sub
+
+sub buildSeriesSeasonList(episodes as object)
+    seasons = []
+    for each episode in episodes
+        season = Val(strField(episode, "season"))
+        if season < 0 then season = 0
+        found = false
+        for each existingSeason in seasons
+            if existingSeason = season then found = true
+        end for
+        if not found then seasons.Push(season)
+    end for
+    for i = 0 to seasons.Count() - 2
+        for j = i + 1 to seasons.Count() - 1
+            if seasons[j] < seasons[i] then
+                temp = seasons[i]
+                seasons[i] = seasons[j]
+                seasons[j] = temp
+            end if
+        end for
+    end for
+    m.seriesSeasonValues = seasons
+    root = CreateObject("roSGNode", "ContentNode")
+    for each season in seasons
+        node = root.CreateChild("ContentNode")
+        if season = 0 then
+            node.title = "Especiais"
+        else
+        node.title = "Temporada " + Str(season).Trim()
+        end if
+    end for
+    m.vodSeasonList.content = root
+    if seasons.Count() > 0 then
+        m.vodSeasonList.jumpToItem = 0
+        m.seriesCurrentSeason = seasons[0]
+        m.vodVisibleItems = episodesForSeason(episodes, seasons[0])
+        buildEpisodeGrid(m.vodVisibleItems)
+    else
+        m.vodVisibleItems = episodes
+        m.episodeGrid.content = CreateObject("roSGNode", "ContentNode")
+    end if
+end sub
+
+function episodesForSeason(episodes as object, season as integer) as object
+    result = []
+    for each episode in episodes
+        if Val(strField(episode, "season")) = season then result.Push(episode)
+    end for
+    return result
+end function
+
+sub onSeriesSeasonFocused()
+    index = m.vodSeasonList.itemFocused
+    if not m.vodDetailGroup.visible or (m.activeView <> "vod_episodes" and m.activeView <> "saimo_episodes") or index < 0 or index >= m.seriesSeasonValues.Count() then return
+    season = m.seriesSeasonValues[index]
+    if season = m.seriesCurrentSeason then return
+    m.seriesCurrentSeason = season
+    m.vodVisibleItems = episodesForSeason(m.seriesAllEpisodes, season)
+    buildEpisodeGrid(m.vodVisibleItems)
+    m.vodEpisodeEmpty.visible = m.vodVisibleItems.Count() = 0
+    if m.vodVisibleItems.Count() = 0 then m.vodEpisodeEmpty.text = "Nenhum episódio disponível nesta temporada."
+end sub
+
+sub startSaimoSearch(query as string, channelEntries as object)
+    if m.fetchTask <> invalid then
+        m.pendingSaimoSearch = query
+        m.pendingSaimoSearchEntries = channelEntries
+        showToast("A busca no catálogo será iniciada quando a requisição atual terminar.")
+        return
+    end if
+    m.saimoSearchEntries = channelEntries
+    m.searchReturnView = m.activeView
+    m.activeView = "search"
+    m.searchActive = true
+    m.itemList.visible = true
+    m.channelGrid.visible = false
+    m.vodGrid.visible = false
+    m.episodeGrid.visible = false
+    setViewHeader("BUSCA", "Busca: " + query, "Pesquisando títulos no catálogo completo...")
+    showLoadProgress("A pesquisar no catalogo...")
+    m.listEntries = channelEntries
+    renderEntries(true)
+    base = saimoBaseUrl(m.vodUrl)
+    startFetch("saimo_search", base + "busca.txt", base, "", query, "")
+end sub
+
+sub handleSaimoSearchResult(task as object)
+    if saimoBaseUrl(strField(task, "baseUrl")) <> saimoBaseUrl(m.vodUrl) then return
+    hideLoadProgress()
+    if task.success <> true then
+        message = strField(task, "error")
+        if message = "" then message = "Não foi possível pesquisar o catálogo VOD."
+        showToastType(message, "error")
+        return
+    end if
+    found = ParseJson(task.resultJson)
+    if type(found) <> "roArray" then return
+    entries = m.saimoSearchEntries
+    for each result in found
+        entries.Push({ kind: "saimo_search_result", data: result })
+    end for
+    m.listEntries = entries
+    m.activeView = "search"
+    m.searchActive = true
+    m.itemList.visible = true
+    m.channelGrid.visible = false
+    m.vodGrid.visible = false
+    m.episodeGrid.visible = false
+    m.listSub.text = Str(entries.Count()).Trim() + " resultados  •  OK abre a letra correspondente"
+    if entries.Count() = 0 then m.emptyLabel.text = "Nenhum resultado para a busca."
+    renderEntries(true)
+    if entries.Count() > 0 then
+        m.itemList.setFocus(true)
+    else
+        m.navList.setFocus(true)
+    end if
+end sub
+
+sub showVod(filter as string)
+    m.activeView = "vod"
+    m.vodGrid.itemSize = [140, 252]
+    m.vodGrid.numColumns = 6
+    m.vodGrid.numRows = 2
+    m.vodFilter = filter
+    m.seriesDetail = invalid
+    m.searchActive = false
+    m.itemList.visible = false
+    m.vodGrid.visible = true
+    m.episodeGrid.visible = false
+    setViewHeader("CATÁLOGO", vodTitleForFilter(filter), "")
+
+    if filter = "movies" then
+        m.vodVisibleItems = m.vodMovies
+    else if filter = "series" then
+        m.vodVisibleItems = m.vodSeries
+    else
+        m.vodVisibleItems = m.vodAll
+    end if
+
+    m.listSub.text = Str(m.vodVisibleItems.Count()).Trim() + " itens  •  OK abre"
+    m.emptyLabel.visible = m.vodVisibleItems.Count() = 0
+    if m.vodVisibleItems.Count() = 0 then
+        if m.vodUrl = "" then
+            m.emptyLabel.text = "Configure a URL do catálogo VOD em Ajustes para carregar filmes e séries."
+        else
+            m.emptyLabel.text = "Nenhum item encontrado nesta categoria. Pressione *Atualizar lista* ou confira a URL em Ajustes."
+        end if
+        m.vodGrid.content = CreateObject("roSGNode", "ContentNode")
+        m.navList.setFocus(true)
+        return
+    end if
+
+    buildVodGrid(m.vodVisibleItems)
+    m.emptyLabel.visible = false
+    m.vodGrid.setFocus(true)
+end sub
+
+sub buildEpisodeGrid(items as object)
+    root = CreateObject("roSGNode", "ContentNode")
+    for each entry in items
+        node = root.CreateChild("ContentNode")
+        node.addFields({ episodeCode: "", episodeTitle: "", episodeMeta: "", episodeSynopsis: "", episodeNumber: "", episodeArt: "" })
+        node.episodeArt = strField(entry, "cover")
+        season = Val(strField(entry, "season"))
+        number = Val(strField(entry, "episode"))
+        seasonCode = "T" + Right("00" + Str(season).Trim(), 2)
+        episodeCode = "E" + Right("00" + Str(number).Trim(), 2)
+        if season <= 0 then seasonCode = "TEMPORADA"
+        if number <= 0 then episodeCode = "EPISÓDIO"
+        node.episodeCode = seasonCode + "  •  " + episodeCode
+        if number > 0 then node.episodeNumber = Str(number).Trim()
+        title = strField(entry, "title").Trim()
+        genericTitle = episodeCode
+        if season > 0 then genericTitle = seasonCode + " " + episodeCode
+        if title = "" or LCase(title) = LCase(genericTitle) or LCase(title) = LCase(episodeCode) then title = "Episódio " + Str(number).Trim()
+        node.episodeTitle = title
+        meta = ""
+        groupName = strField(entry, "group").Trim()
+        if groupName <> "" then meta = groupName
+        if type(entry.sources) = "roArray" and entry.sources.Count() > 0 then
+            if meta <> "" then meta = meta + "  •  "
+            meta = meta + Str(entry.sources.Count()).Trim() + " fontes"
+        end if
+        runtime = Val(strField(entry, "runtime"))
+        if runtime > 0 then
+            if meta <> "" then meta = meta + "  •  "
+            meta = meta + Str(runtime).Trim() + " min"
+        end if
+        node.episodeMeta = meta
+        synopsis = strField(entry, "synopsis")
+        if synopsis = "" then synopsis = strField(entry, "description")
+        node.episodeSynopsis = synopsis
+    end for
+    m.episodeGrid.content = root
+    m.episodeGrid.jumpToItem = 0
+end sub
+
+sub buildVodGrid(items as object)
+    root = CreateObject("roSGNode", "ContentNode")
+    for each entry in items
+        node = root.CreateChild("ContentNode")
+        node.title = strField(entry, "title")
+        poster = strField(entry, "cover")
+        if poster = "" then poster = "pkg:/images/placeholder.png"
+        node.hdGridPosterUrl = poster
+        itemType = strField(entry, "type")
+        node.shortDescriptionLine1 = strField(entry, "title")
+        node.shortDescriptionLine2 = saimoGridSubtitle(entry)
+    end for
+    m.vodGrid.content = root
+    m.vodGrid.jumpToItem = 0
+end sub
+
+sub onVodItemFocused()
+    index = m.vodGrid.itemFocused
+    if m.activeView = "vod_episodes" or m.activeView = "saimo_episodes" then index = m.episodeGrid.itemFocused
+    if index < 0 or index >= m.vodVisibleItems.Count() then return
+    entry = m.vodVisibleItems[index]
+    title = strField(entry, "title")
+    itemType = LCase(strField(entry, "type"))
+    subtitle = saimoItemSubtitle(entry)
+    detail = title
+    if subtitle <> "" then detail = detail + "  •  " + subtitle
+    if itemType = "series" and Val(strField(entry, "episodeCount")) = 0 and type(entry.episodes) = "roArray" and entry.episodes.Count() > 0 then
+        detail = detail + "  •  " + Str(entry.episodes.Count()).Trim() + " episódios"
+    end if
+    if type(entry.sources) = "roArray" and entry.sources.Count() > 1 then
+        detail = detail + "  •  " + Str(entry.sources.Count()).Trim() + " fontes"
+    end if
+    m.listSub.text = detail
+end sub
+
+sub onVodItemSelected()
+    index = m.vodGrid.itemSelected
+    if m.activeView = "vod_episodes" or m.activeView = "saimo_episodes" then index = m.episodeGrid.itemSelected
+    if index < 0 or index >= m.vodVisibleItems.Count() then return
+    entry = m.vodVisibleItems[index]
+
+    if m.activeView = "saimo_home" then
+        openSaimoEntry(entry, "saimo_home", index)
+        return
+    end if
+
+    if m.activeView = "vod_episodes" or m.activeView = "saimo_episodes" then
+        playVodEntry(entry)
+        return
+    end if
+
+    itemType = LCase(strField(entry, "type"))
+    if itemType = "series" and (m.activeView = "saimo_catalog" or m.activeView = "vod_favorites") and (strField(entry, "sourceType") = "saimo" or (strField(entry, "letter") <> "" and strField(entry, "piece") <> "")) then
+        m.seriesDetailReturnView = m.activeView
+        m.seriesDetailReturnIndex = index
+        openSaimoEntry(entry, m.activeView, index)
+    else if itemType = "series" and strField(entry, "sourceType") = "saimo" and strField(entry, "piece") <> "" then
+        m.seriesDetailReturnView = m.activeView
+        m.seriesDetailReturnIndex = index
+        openSaimoEntry(entry, m.activeView, index)
+    else if itemType = "series" and type(entry.episodes) = "roArray" and entry.episodes.Count() > 0 then
+        showSeriesEpisodes(entry, m.activeView, index)
+    else if itemType = "series" then
+        showSeriesDetails(entry, [], "vod_episodes", m.activeView, index)
+    else
+        showVodMovieDetails(entry, m.activeView, index)
+    end if
+end sub
+
+sub showSeriesEpisodes(series as object, returnView as string, returnIndex as integer)
+    if series = invalid then return
+    m.seriesReturnFilter = m.vodFilter
+    showSeriesDetails(series, series.episodes, "vod_episodes", returnView, returnIndex)
+end sub
+
+sub playVodEntry(entry as object)
+    if entry = invalid then return
+    sources = entry.sources
+    if type(sources) <> "roArray" or sources.Count() = 0 then
+        showToastType("Este item não possui um endereço de reprodução válido.", "error")
+        return
+    end if
+    channel = {
+        title: strField(entry, "title")
+        logo: strField(entry, "cover")
+        group: strField(entry, "group")
+        tvgId: ""
+        sources: sources
+        isLive: false
+    }
+    playChannel(channel, 0)
+end sub
+
+' ---------------------------------------------------------------------------
+' Busca
+' ---------------------------------------------------------------------------

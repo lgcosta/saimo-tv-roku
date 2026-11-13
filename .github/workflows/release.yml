@@ -1,7 +1,7 @@
 name: Release
 
-# Publica o pacote .zip do Roku como release do GitHub.
-# Executa quando uma tag v* e criada.
+# Compila o projecto BrighterScript e publica o pacote .zip do Roku como
+# release do GitHub. Executa quando uma tag v* e criada.
 on:
   push:
     tags:
@@ -17,14 +17,26 @@ jobs:
       - name: Obter o código
         uses: actions/checkout@v4
 
+      - name: Preparar o Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Compilar (bsc) e validar
+        run: npx bsc
+
       - name: Montar o pacote
         run: |
           set -e
+          test -f build/manifest
           mkdir -p dist
-          zip -r -X dist/saimo-tv-pkg.zip . \
-            -x 'dist/*' '.git/*' '.github/*' \
-               'README.md' 'CHANGELOG.md' 'LICENSE' '.gitignore'
-          unzip -l dist/saimo-tv-pkg.zip | tail -3
+          cd build
+          zip -r -X ../dist/saimo-tv-pkg.zip .
+          unzip -l ../dist/saimo-tv-pkg.zip | tail -3
 
       - name: Publicar a release
         uses: softprops/action-gh-release@v2

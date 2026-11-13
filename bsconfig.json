@@ -1,0 +1,17 @@
+{
+    "rootDir": ".",
+    "files": [
+        "manifest",
+        "source/**/*",
+        "components/**/*",
+        "images/**/*",
+        "fonts/**/*"
+    ],
+    "stagingDir": "./build",
+    "retainStagingDir": true,
+    "createPackage": false,
+    "sourceMap": false,
+    "diagnosticFilters": [
+        "node_modules/**/*"
+    ]
+}

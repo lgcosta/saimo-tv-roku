@@ -16,3 +16,7 @@ Thumbs.db
 *~
 .idea/
 .vscode/
+
+# Toolchain BrighterScript
+node_modules/
+build/

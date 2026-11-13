@@ -1,0 +1,387 @@
+' ---------------------------------------------------------------------------
+' Parte da cena principal: Busca, Favoritos do catalogo.
+' O ficheiro MainScene.bs guarda o ciclo de vida e o estado; este corre no
+' mesmo ambito de componente (as scripts do MainScene.xml partilham o escopo).
+' ---------------------------------------------------------------------------
+
+sub openSearchDialog()
+    if m.playerVisible or m.settingsVisible or m.guideVisible or m.aboutVisible then return
+    m.searchReturnView = m.activeView
+
+    dialog = CreateObject("roSGNode", "KeyboardDialog")
+    dialog.title = "Buscar canal, filme ou série"
+    dialog.buttons = ["Buscar", "Cancelar"]
+    dialog.text = ""
+    dialog.observeField("buttonSelected", "onSearchButtonSelected")
+    dialog.observeField("wasClosed", "onDialogClosed")
+    m.editKey = "search"
+    showModalDialog(dialog)
+end sub
+
+sub onSearchButtonSelected()
+    if m.dialog = invalid then return
+    index = m.dialog.buttonSelected
+    text = m.dialog.text
+    if text = invalid then text = ""
+    closeDialog()
+    if index = 0 and text.Trim() <> "" then runSearch(text.Trim())
+end sub
+
+sub runSearch(query as string)
+    q = LCase(query)
+    entries = []
+    count = 0
+
+    for each ch in m.channels
+        if Instr(1, LCase(ch.title), q) > 0 or Instr(1, LCase(ch.group), q) > 0 then
+            entries.Push({ kind: "channel", data: ch })
+            count = count + 1
+            if count >= 120 then exit for
+        end if
+    end for
+
+    if count < 120 then
+        for each item in m.vodAll
+            if Instr(1, LCase(strField(item, "title")), q) > 0 or Instr(1, LCase(strField(item, "group")), q) > 0 then
+                entries.Push({ kind: "vod", data: item })
+                count = count + 1
+                if count >= 120 then exit for
+            end if
+        end for
+    end if
+
+    if isSaimoVodUrl(m.vodUrl) then
+        startSaimoSearch(query, entries)
+        return
+    end if
+
+    m.activeView = "search"
+    m.searchActive = true
+    m.itemList.visible = true
+    m.channelGrid.visible = false
+    m.vodGrid.visible = false
+    m.episodeGrid.visible = false
+    m.listEntries = entries
+    setViewHeader("BUSCA", "Busca: " + query, Str(entries.Count()).Trim() + " resultados  •  OK abre")
+    m.emptyLabel.text = "Nenhum resultado para \"" + query + "\"."
+    renderEntries(true)
+    if entries.Count() > 0 then
+        m.itemList.setFocus(true)
+    else
+        m.navList.setFocus(true)
+    end if
+end sub
+
+sub restoreAfterSearch()
+    m.searchActive = false
+    if m.searchReturnView = "vod" then
+        showVod(m.vodFilter)
+    else if m.searchReturnView = "vod_episodes" and m.seriesDetail <> invalid then
+        showSeriesEpisodes(m.seriesDetail, m.seriesDetailReturnView, m.seriesDetailReturnIndex)
+    else if m.searchReturnView = "vod_movie_detail" and m.detailItem <> invalid then
+        showVodMovieDetails(m.detailItem, m.detailReturnView, m.detailReturnIndex)
+    else if m.searchReturnView = "vod_favorites" then
+        showVodFavorites()
+    else if m.searchReturnView = "saimo_home" then
+        showSaimoHome(m.vodFilter)
+    else if m.searchReturnView = "saimo_letters" then
+        showSaimoLetters(m.vodFilter)
+    else if m.searchReturnView = "saimo_catalog" then
+        showSaimoGrid(m.saimoCurrentItems)
+    else if m.searchReturnView = "saimo_episodes" and m.seriesDetail <> invalid then
+        showSaimoEpisodes(m.vodVisibleItems)
+    else
+        populateChannels(m.selectedGroup, true)
+    end if
+end sub
+
+' ---------------------------------------------------------------------------
+' Favoritos
+' ---------------------------------------------------------------------------
+
+' Rotulo de tipo da ficha (fichaTipo do Android: caps em accent).
+function vodDetailTypeLabel(item as object) as string
+    if item = invalid then return "FILME"
+    itemType = LCase(strField(item, "type"))
+    if itemType = "series" then return "SÉRIE"
+    if itemType = "episode" then return "EPISÓDIO"
+    return "FILME"
+end function
+
+' Metadados da ficha no lugar de fichaSelos + fichaGeneros: ano, generos,
+' duracao, contagem e fontes. O rotulo de tipo fica em vodDetailTipo.
+function vodDetailsMeta(item as object) as string
+    if item = invalid then return ""
+    itemType = LCase(strField(item, "type"))
+    meta = ""
+    year = strField(item, "year").Trim()
+    if year <> "" then meta = year
+    genres = strField(item, "genres").Trim()
+    if genres <> "" then
+        if meta <> "" then meta = meta + "  •  "
+        meta = meta + genres
+    end if
+    runtime = Val(strField(item, "runtime"))
+    if runtime > 0 then
+        if meta <> "" then meta = meta + "  •  "
+        meta = meta + Str(runtime).Trim() + " min"
+    end if
+    if itemType = "series" then
+        count = Val(strField(item, "episodeCount"))
+        if count > 0 then
+            if meta <> "" then meta = meta + "  •  "
+            meta = meta + Str(count).Trim() + " episódios"
+        end if
+    else if type(item.sources) = "roArray" and item.sources.Count() > 0 then
+        if meta <> "" then meta = meta + "  •  "
+        meta = meta + Str(item.sources.Count()).Trim() + " fontes"
+    end if
+    return meta
+end function
+
+sub updateVodDetailContent(item as object)
+    if item = invalid then return
+    cover = strField(item, "cover")
+    showFichaBackdrop(cover)
+    if cover = "" then cover = "pkg:/images/placeholder.png"
+    m.vodDetailPoster.uri = cover
+    m.vodDetailTipo.text = vodDetailTypeLabel(item)
+    m.vodDetailTitle.text = strField(item, "title")
+    ' A frase da ficha recebe a dica da tela: setViewHeader roda logo antes
+    ' nas tres fichas e o veu opaco esconderia o listSub por baixo.
+    m.vodDetailFrase.text = m.listSub.text
+    m.vodDetailMeta.text = vodDetailsMeta(item)
+    synopsis = strField(item, "overview")
+    if synopsis = "" then synopsis = strField(item, "synopsis")
+    if synopsis = "" then synopsis = strField(item, "description")
+    if synopsis = "" and LCase(strField(item, "type")) = "series" then
+        synopsis = "Informações detalhadas da série e sinopse não foram fornecidas por esta fonte. Selecione uma temporada para ver os episódios disponíveis."
+    else if synopsis = "" then
+        synopsis = "Sinopse não fornecida por esta fonte."
+    end if
+    m.vodDetailSynopsis.text = synopsis
+end sub
+
+sub renderVodDetailActions(item as object, isSeries as boolean)
+    root = CreateObject("roSGNode", "ContentNode")
+    entries = []
+    if not isSeries then entries.Push({ title: "‣  Assistir", kind: "play" })
+    favoriteTitle = "◊  Adicionar aos favoritos"
+    key = vodFavoriteKey(item)
+    if key <> "" and m.vodFavoritesByKey[key] = true then favoriteTitle = "◊  Remover dos favoritos"
+    entries.Push({ title: favoriteTitle, kind: "favorite" })
+    entries.Push({ title: "Voltar", kind: "back" })
+    m.detailActionEntries = entries
+    for each entry in entries
+        node = root.CreateChild("ContentNode")
+        node.addFields({ kind: entry.kind })
+        node.title = entry.title
+    end for
+    m.vodDetailActions.content = root
+    m.vodDetailActions.jumpToItem = 0
+end sub
+
+sub showVodMovieDetails(item as object, returnView as string, returnIndex as integer)
+    if item = invalid then return
+    m.detailReturnView = returnView
+    m.detailReturnIndex = returnIndex
+    m.detailReturnFilter = m.vodFilter
+    m.detailItem = item
+    m.detailIsSeries = false
+    m.activeView = "vod_movie_detail"
+    m.seriesDetail = invalid
+    m.itemList.visible = false
+    m.vodGrid.visible = false
+    m.episodeGrid.visible = false
+    m.shelfList.visible = false
+    m.emptyLabel.visible = false
+    m.vodSeasonHeading.visible = false
+    m.vodSeasonList.visible = false
+    m.vodEpisodeEmpty.visible = false
+    setViewHeader("FILME", strField(item, "title"), "Detalhes do filme  •  escolha uma ação")
+    updateVodDetailContent(item)
+    renderVodDetailActions(item, false)
+    m.vodDetailGroup.visible = true
+    m.vodDetailActions.setFocus(true)
+end sub
+
+sub toggleVodFavorite(item as object)
+    if item = invalid then return
+    key = vodFavoriteKey(item)
+    if key = "" then return
+    if m.vodFavoritesByKey[key] = true then
+        m.vodFavoritesByKey.Delete(key)
+        updated = []
+        for each favorite in m.vodFavoriteItems
+            if vodFavoriteKey(favorite) <> key then updated.Push(favorite)
+        end for
+        m.vodFavoriteItems = updated
+        showToast("Removido dos favoritos: " + strField(item, "title"))
+    else
+        m.vodFavoritesByKey[key] = true
+        m.vodFavoriteItems.Push(item)
+        showToast("Adicionado aos favoritos: " + strField(item, "title"))
+    end if
+    saveVodFavorites()
+    if m.vodDetailGroup.visible then renderVodDetailActions(item, m.detailIsSeries)
+end sub
+
+sub onVodDetailActionSelected()
+    index = m.vodDetailActions.itemSelected
+    if index < 0 or index >= m.detailActionEntries.Count() then return
+    action = m.detailActionEntries[index]
+    if action.kind = "play" then
+        playVodEntry(m.detailItem)
+    else if action.kind = "favorite" then
+        toggleVodFavorite(m.detailItem)
+        m.vodDetailActions.jumpToItem = index
+        m.vodDetailActions.setFocus(true)
+    else if action.kind = "back" then
+        if m.detailIsSeries then
+            restoreSeriesDetailReturn()
+        else
+            restoreVodDetailReturn()
+        end if
+    end if
+end sub
+
+sub restoreVodDetailReturn()
+    returnView = m.detailReturnView
+    returnIndex = m.detailReturnIndex
+    m.vodDetailGroup.visible = false
+    m.detailItem = invalid
+    if returnView = "saimo_home" then
+        showSaimoHome(m.detailReturnFilter)
+    else if returnView = "saimo_catalog" then
+        showSaimoGrid(m.saimoCurrentItems)
+        if returnIndex >= 0 and returnIndex < m.saimoCurrentItems.Count() then m.vodGrid.jumpToItem = returnIndex
+        m.vodGrid.setFocus(true)
+    else if returnView = "vod_favorites" then
+        showVodFavorites()
+        if returnIndex >= 0 and returnIndex < m.vodFavoriteItems.Count() then m.vodGrid.jumpToItem = returnIndex
+        m.vodGrid.setFocus(true)
+    else if returnView = "vod" then
+        showVod(m.detailReturnFilter)
+        if returnIndex >= 0 and returnIndex < m.vodVisibleItems.Count() then m.vodGrid.jumpToItem = returnIndex
+        m.vodGrid.setFocus(true)
+    else if returnView = "search" then
+        m.activeView = "search"
+        m.vodGrid.visible = false
+        m.episodeGrid.visible = false
+        m.itemList.visible = true
+    m.channelGrid.visible = false
+        setViewHeader("BUSCA", "Resultados", Str(m.listEntries.Count()).Trim() + " itens  •  OK abre")
+        renderEntries(false)
+        if m.listEntries.Count() > 0 then
+            if returnIndex >= 0 and returnIndex < m.listEntries.Count() then m.itemList.jumpToItem = returnIndex
+            m.itemList.setFocus(true)
+        else
+            m.navList.setFocus(true)
+        end if
+    else
+        populateChannels(m.selectedGroup, true)
+    end if
+end sub
+
+sub restoreSeriesDetailReturn()
+    returnView = m.seriesDetailReturnView
+    returnIndex = m.seriesDetailReturnIndex
+    m.vodDetailGroup.visible = false
+    m.seriesDetail = invalid
+    m.seriesAllEpisodes = []
+    m.seriesSeasonValues = []
+    if returnView = "saimo_home" then
+        showSaimoHome(m.seriesReturnFilter)
+    else if returnView = "saimo_catalog" then
+        showSaimoGrid(m.saimoCurrentItems)
+        if returnIndex >= 0 and returnIndex < m.saimoCurrentItems.Count() then m.vodGrid.jumpToItem = returnIndex
+        m.vodGrid.setFocus(true)
+    else if returnView = "vod_favorites" then
+        showVodFavorites()
+        if returnIndex >= 0 and returnIndex < m.vodFavoriteItems.Count() then m.vodGrid.jumpToItem = returnIndex
+        m.vodGrid.setFocus(true)
+    else if returnView = "search" then
+        m.activeView = "search"
+        m.vodGrid.visible = false
+        m.episodeGrid.visible = false
+        m.itemList.visible = true
+    m.channelGrid.visible = false
+        setViewHeader("BUSCA", "Resultados", Str(m.listEntries.Count()).Trim() + " itens  •  OK abre")
+        renderEntries(false)
+        if m.listEntries.Count() > 0 then
+            if returnIndex >= 0 and returnIndex < m.listEntries.Count() then m.itemList.jumpToItem = returnIndex
+            m.itemList.setFocus(true)
+        else
+            m.navList.setFocus(true)
+        end if
+    else
+        showVod(m.seriesReturnFilter)
+        if returnIndex >= 0 and returnIndex < m.vodVisibleItems.Count() then m.vodGrid.jumpToItem = returnIndex
+        m.vodGrid.setFocus(true)
+    end if
+end sub
+
+sub openSaimoEntry(item as object, returnView as string, returnIndex as integer)
+    if item = invalid then return
+    itemType = LCase(strField(item, "type"))
+    returnFilter = m.vodFilter
+    m.seriesReturnFilter = returnFilter
+    m.pendingSaimoDetailReturnFilter = returnFilter
+    m.detailReturnFilter = returnFilter
+    m.vodFilter = "movies"
+    if itemType = "series" then m.vodFilter = "series"
+    if itemType = "series" and strField(item, "piece") <> "" and strField(item, "letter") <> "" then
+        m.seriesDetailReturnView = returnView
+        m.seriesDetailReturnIndex = returnIndex
+        loadSaimoEpisodes(item)
+        return
+    end if
+    letter = strField(item, "letter")
+    ' As fileiras editoriais de animes e doramas vem sem a coluna da letra.
+    ' A regra do catalogo (primeiro caractere, sem acento) permite deduzi-la
+    ' e evita que o usuario clique num titulo e nada aconteca.
+    if letter = "" then letter = saimoLetterOf(strField(item, "title"))
+    m.pendingSaimoDetail = item
+    m.pendingSaimoDetailReturnView = returnView
+    m.pendingSaimoDetailReturnIndex = returnIndex
+    loadSaimoLetter(letter)
+end sub
+
+sub toggleFavorite()
+    if m.playerVisible or m.settingsVisible or m.guideVisible or m.aboutVisible then return
+    ' Na grelhe de canais a tecla marca o canal em foco como favorito.
+    if m.activeView = "channels" and m.channelGrid.visible then
+        index = m.channelGrid.itemFocused
+        if index < 0 or index >= m.orderedChannels.Count() then return
+        toggleChannelFavorite(m.orderedChannels[index])
+        return
+    end if
+    if m.activeView = "vod" or m.activeView = "vod_episodes" or m.activeView = "saimo_letters" or m.activeView = "saimo_home" or m.activeView = "saimo_catalog" or m.activeView = "saimo_episodes" or m.activeView = "saimo_episodes_loading" or m.activeView = "vod_movie_detail" or m.activeView = "vod_favorites" then return
+    index = m.itemList.itemFocused
+    if index < 0 or index >= m.listEntries.Count() then return
+    entry = m.listEntries[index]
+    if entry.kind <> "channel" then return
+
+    title = entry.data.title
+    if m.favorites[title] = true then
+        m.favorites.Delete(title)
+        newTitles = []
+        for each name in m.favoriteTitles
+            if name <> title then newTitles.Push(name)
+        end for
+        m.favoriteTitles = newTitles
+        showToast("Removido dos favoritos: " + title)
+    else
+        m.favorites[title] = true
+        m.favoriteTitles.Push(title)
+        showToast("Adicionado aos favoritos: " + title)
+    end if
+    saveFavorites()
+    renderEntries(false)
+    m.itemList.jumpToItem = index
+    m.itemList.setFocus(true)
+end sub
+
+' ---------------------------------------------------------------------------
+' Ajustes
+' ---------------------------------------------------------------------------

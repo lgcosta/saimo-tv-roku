@@ -13,6 +13,8 @@ portuguesa do [M3UPT](https://github.com/LITUATUI/M3UPT) como categoria fixa.
   segundo plano.
 - **Listas M3U do utilizador** — cada lista que acrescentares em Ajustes entra
   na grelha como mais um grupo, ao lado da tua e dos Canais de Portugal.
+- **Favoritos e recentes** — a tecla de informação marca o canal em foco e os
+  últimos sintonizados ficam numa categoria própria.
 - **Favoritos, Busca, Guia de TV e Ajustes** — lista M3U configurável, EPG
   XMLTV, agente HTTP e diagnóstico.
 - **Canais de Portugal** — 432 canais do M3UPT, ao lado da sua lista.
@@ -56,16 +58,40 @@ curl http://<IP-DA-TV>:8060/query/active-app
 A app imprime marcadores na consola (`SAIMO init`, `SAIMO Portugal`,
 `SAIMO letra …`), úteis para confirmar que cada etapa arrancou.
 
+## Compilar
+
+O código é escrito em **BrighterScript** (`.bs`) e compilado para BrightScript
+(`.brs`) pelo `bsc`. O pacote Roku sai do *staging* que o compilador gera:
+
+```bash
+npm ci
+npx bsc                 # valida e transpila para build/
+cd build && zip -r -X ../saimo-tv-pkg.zip .
+```
+
+Nada de `build/` é versionado; o workflow de release corre estes passos.
+
 ## Estrutura
 
 ```
 manifest            metadados do pacote Roku
+bsconfig.json       configuração do BrighterScript (staging em build/)
 source/
-  main.brs           ponto de entrada
-  bslib.brs          biblioteca: parsers, HTTP, catálogo Saimo, M3UPT
-  theme.brs          paleta e cores
+  main.bs            ponto de entrada
+  core.bs            biblioteca: parsers, HTTP, catálogo Saimo, M3UPT
+  theme.bs           paleta e cores
 components/
-  MainScene.*        tela principal (brs + xml)
+  MainScene.bs       ciclo de vida e estado da cena
+  scene-channels.bs  canais, grupos, favoritos e recentes
+  scene-extras.bs    listas M3U externas
+  scene-data.bs      registry e cache local
+  scene-chrome.bs    cabeçalho, lista, canal em foco e avisos
+  scene-vod.bs       catálogo de filmes e séries
+  scene-search.bs    busca e favoritos do catálogo
+  scene-settings.bs  ajustes e diálogos
+  scene-guide.bs     guia/EPG e sobre
+  scene-player.bs    player e failover de fontes
+  scene-keys.bs      teclado e foco
   ChannelCard.*      cartão de canal (logo, nome, programa)
   VodCard.*          cartão de filme/série
   EpisodeCard.*      cartão de episódio

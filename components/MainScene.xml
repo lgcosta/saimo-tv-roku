@@ -1,8 +1,20 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <component name="MainScene" extends="Scene">
-    <script type="text/brightscript" uri="pkg:/source/bslib.brs" />
-    <script type="text/brightscript" uri="pkg:/source/theme.brs" />
-    <script type="text/brightscript" uri="pkg:/components/MainScene.brs" />
+    <script type="text/brightscript" uri="pkg:/source/core.bs" />
+    <script type="text/brightscript" uri="pkg:/source/theme.bs" />
+    <!-- A cena e repartida por responsabilidade; todas as scripts listadas
+         partilham o mesmo ambito de componente. -->
+    <script type="text/brightscript" uri="pkg:/components/MainScene.bs" />
+    <script type="text/brightscript" uri="pkg:/components/scene-data.bs" />
+    <script type="text/brightscript" uri="pkg:/components/scene-channels.bs" />
+    <script type="text/brightscript" uri="pkg:/components/scene-extras.bs" />
+    <script type="text/brightscript" uri="pkg:/components/scene-chrome.bs" />
+    <script type="text/brightscript" uri="pkg:/components/scene-vod.bs" />
+    <script type="text/brightscript" uri="pkg:/components/scene-search.bs" />
+    <script type="text/brightscript" uri="pkg:/components/scene-settings.bs" />
+    <script type="text/brightscript" uri="pkg:/components/scene-guide.bs" />
+    <script type="text/brightscript" uri="pkg:/components/scene-player.bs" />
+    <script type="text/brightscript" uri="pkg:/components/scene-keys.bs" />
 
     <children>
         <Group visible="false">
@@ -92,10 +104,14 @@
                         horizFocusAnimationStyle="floatingFocus" vertFocusAnimationStyle="floatingFocus"
                         drawFocusFeedback="false" visible="false" />
 
+            <!-- A altura da linha (252) e o rotulo (~24) + o espaco ate aos
+                 cartoes (28) + a altura do cartao (200). Antes a linha tinha
+                 204 e os cartoes 306, pelo que cada fileira invadia o titulo
+                 da seguinte. -->
             <RowList id="shelfList" translation="[292, 133]"
-                     itemComponentName="ShelfCard" itemSize="[920, 204]" numRows="2"
-                     itemSpacing="[1, 7]" rowItemSize="[[168, 306]]"
-                     rowItemSpacing="[[14, 0]]" rowLabelOffset="[[0, 30]]"
+                     itemComponentName="ShelfCard" itemSize="[920, 252]" numRows="2"
+                     itemSpacing="[1, 12]" rowItemSize="[[118, 196]]"
+                     rowItemSpacing="[[16, 0]]" rowLabelOffset="[[0, 28]]"
                      rowFocusAnimationStyle="floatingFocus" vertFocusAnimationStyle="floatingFocus"
                      showRowLabel="[true]" showRowCounter="[false]"
                      rowLabelFont="dictionary:fontLabel" rowLabelColor="0xE8E2F5FF"
@@ -169,19 +185,6 @@
         </Group>
 
         <Video id="video" visible="false" width="1280" height="720" />
-
-        <Video id="previewVideo" translation="[1028, 585]" width="240" height="135"
-               visible="false" />
-
-        <Group id="previewLabels" translation="[1028, 585]" visible="false">
-            <Rectangle id="previewCaptionBg" translation="[0, 109]" width="240" height="26"
-                       color="0x0B0E14B3" />
-            <Label id="previewTitle" translation="[6, 111]" width="160" height="22"
-                   font="dictionary:fontMeta" color="0xF7F3FFFF" maxLines="1" text="" />
-            <Label id="previewState" translation="[170, 111]" width="64" height="22"
-                   font="dictionary:fontMeta" color="0x4FE3D0FF" horizAlign="right"
-                   maxLines="1" text="" />
-        </Group>
 
         <Group id="settingsGroup" visible="false">
             <Rectangle translation="[64, 35]" width="1152" height="649" color="0x0D0A15F2" />

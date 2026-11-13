@@ -6,8 +6,8 @@
         <field id="itemHasFocus" type="boolean" onChange="updateFocus" />
     </interface>
 
-    <script type="text/brightscript" uri="pkg:/source/bslib.brs" />
-    <script type="text/brightscript" uri="pkg:/components/ShelfCard.brs" />
+    <script type="text/brightscript" uri="pkg:/source/core.bs" />
+    <script type="text/brightscript" uri="pkg:/components/ShelfCard.bs" />
 
     <children>
         <Label visible="false">

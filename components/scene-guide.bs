@@ -1,0 +1,166 @@
+' ---------------------------------------------------------------------------
+' Parte da cena principal: Guia / EPG, Sobre.
+' O ficheiro MainScene.bs guarda o ciclo de vida e o estado; este corre no
+' mesmo ambito de componente (as scripts do MainScene.xml partilham o escopo).
+' ---------------------------------------------------------------------------
+
+sub openGuide()
+    if m.channels.Count() = 0 then
+        showToast("Nenhum canal carregado.")
+        return
+    end if
+    m.guideVisible = true
+    m.homeGroup.visible = false
+    m.settingsGroup.visible = false
+    m.aboutGroup.visible = false
+    m.guideGroup.visible = true
+    buildGuide()
+    m.guideList.setFocus(true)
+end sub
+
+sub closeGuide()
+    m.guideVisible = false
+    m.guideGroup.visible = false
+    m.homeGroup.visible = true
+    focusListOrNav()
+end sub
+
+function formatEpgClock(epoch as integer) as string
+    if epoch <= 0 then return "--:--"
+    dateTime = CreateObject("roDateTime")
+    dateTime.FromSeconds(epoch)
+    dateTime.ToLocalTime()
+    return Right("0" + Str(dateTime.GetHours()).Trim(), 2) + ":" + Right("0" + Str(dateTime.GetMinutes()).Trim(), 2)
+end function
+
+sub buildGuide()
+    m.guideChannels = []
+    root = CreateObject("roSGNode", "ContentNode")
+    for each ch in m.channels
+        title = ch.title
+        nowText = ""
+        nextText = ""
+        timeText = ""
+        if ch.tvgId <> "" then
+            entry = m.epg[ch.tvgId]
+            if type(entry) = "roAssociativeArray" then
+                nowText = strField(entry, "nowTitle")
+                nextText = strField(entry, "nextTitle")
+                nowStart = Val(strField(entry, "nowStart"))
+                nowStop = Val(strField(entry, "nowStop"))
+                nextStart = Val(strField(entry, "nextStart"))
+                if nowStart > 0 and nowStop > nowStart then
+                    timeText = formatEpgClock(nowStart) + "–" + formatEpgClock(nowStop)
+                end if
+                if nowText <> "" and nowStop > nowStart then
+                    currentSeconds = CreateObject("roDateTime").AsSeconds()
+                    progress = Int(100 * (currentSeconds - nowStart) / (nowStop - nowStart))
+                    if progress < 0 then progress = 0
+                    if progress > 100 then progress = 100
+                    nowText = nowText + "  " + Str(progress).Trim() + "%"
+                end if
+            end if
+        end if
+        if nowText <> "" then
+            if timeText <> "" then title = title + "  •  " + timeText
+            title = title + "  •  " + nowText
+        else
+            title = title + "  •  sem programação"
+        end if
+        if nextText <> "" then title = title + "  •  a seguir " + formatEpgClock(nextStart) + "  " + nextText
+        item = root.CreateChild("ContentNode")
+        item.title = title
+        m.guideChannels.Push(ch)
+    end for
+    m.guideList.content = root
+    m.guideList.jumpToItem = 0
+    if m.epgLoaded then
+        m.guideSub.text = Str(m.channels.Count()).Trim() + " canais  •  EPG carregado"
+    else if m.epgUrl = "" then
+        m.guideSub.text = Str(m.channels.Count()).Trim() + " canais  •  Configure um EPG em Ajustes"
+    else
+        m.guideSub.text = Str(m.channels.Count()).Trim() + " canais  •  EPG ainda carregando"
+    end if
+end sub
+
+sub onGuideSelected()
+    index = m.guideList.itemSelected
+    if index < 0 or index >= m.guideChannels.Count() then return
+    channel = m.guideChannels[index]
+    closeGuide()
+    playChannel(channel, 0)
+end sub
+
+sub loadEpg()
+    if m.epgUrl = "" or m.epgTask <> invalid then return
+    ' Nao repete o download de um EPG que o aparelho nao consegue ler.
+    if m.epgUnsupported then return
+    task = CreateObject("roSGNode", "EpgTask")
+    task.url = m.epgUrl
+    task.userAgent = m.userAgent
+    task.observeField("state", "onEpgState")
+    m.epgTask = task
+    task.control = "RUN"
+end sub
+
+sub onEpgState()
+    if m.epgTask = invalid then return
+    state = m.epgTask.state
+    if state <> "done" and state <> "stop" then return
+    task = m.epgTask
+    m.epgTask = invalid
+    if task.success <> true then
+        message = strField(task, "error")
+        if message <> "" then m.status.text = message
+        if boolField(task, "unsupported", false) then
+            ' O EPG comprimido nao vai funcionar neste aparelho: avisa uma
+            ' vez e para de tentar ate o usuario trocar o endereco.
+            m.epgUnsupported = true
+            writeSetting("epgUnsupported", "1")
+            showToastType(message, "error")
+        end if
+        return
+    end if
+    parsed = ParseJson(task.resultJson)
+    if type(parsed) = "roAssociativeArray" then
+        m.epg = parsed
+        m.epgLoaded = true
+        if m.guideVisible then buildGuide()
+        showToastType("EPG carregado.", "success")
+    end if
+end sub
+
+' ---------------------------------------------------------------------------
+' Sobre
+' ---------------------------------------------------------------------------
+
+sub openAbout()
+    m.settingsVisible = false
+    m.settingsGroup.visible = false
+    m.aboutVisible = true
+    m.aboutGroup.visible = true
+    m.homeGroup.visible = false
+    text = "Saimo TV 2.7.0 - cliente pessoal não oficial para Roku." + Chr(10) + Chr(10)
+    text = text + "Este aplicativo não é afiliado à Saimo. Ele lê listas M3U e o catálogo público que você configura. Use somente fontes de conteúdo que você tenha permissão para acessar e distribuir." + Chr(10) + Chr(10)
+    text = text + "Interface 2.7.0: a tecla de informação marca o canal em foco como favorito, e os últimos canais sintonizados ficam na categoria Recentes. Você também pode acrescentar as suas próprias listas M3U em Ajustes, cada uma como um grupo próprio." + Chr(10) + Chr(10)
+    text = text + "Canais de Portugal: a lista pública do M3UPT (https://m3upt.com/iptv) entra como categoria fixa, ao lado da lista que você configura. Traz TV, rádios e beachcams portugueses, com os cabeçalhos HTTP que cada emissor exige. Canais com DRM ClearKey e conteúdo sob demanda ficam de fora, porque o Roku não os reproduz." + Chr(10) + Chr(10)
+    text = text + "O EPG do M3UPT (https://m3upt.com/epg) vem comprimido em gzip e o Roku não sabe descomprimir, por isso o guia fica vazio até você indicar um XMLTV em texto puro em Ajustes." + Chr(10) + Chr(10)
+    text = text + "Listas M3U externas: em Ajustes, “Adicionar lista M3U” guarda o endereço e mostra a lista como mais um grupo na grelha, ao lado da sua lista principal e dos Canais de Portugal. Se uma lista deixar de responder, o grupo desaparece em vez de ficar a mostrar canais velhos." + Chr(10) + Chr(10)
+    text = text + "Recursos: canais por grupo, múltiplas fontes com failover, favoritos, busca com acentos, catálogo VOD em grade de pôsteres, filmes, séries e episódios, capas carregadas em segundo plano, cache por letra e sincronização automática (verificação a cada 15 minutos; download quando o cache passa de 6 horas)." + Chr(10) + Chr(10)
+    text = text + "Ao vivo não pausa nem busca, como em qualquer transmissão em tempo real. Filmes e séries mantêm pausa e busca." + Chr(10) + Chr(10)
+    text = text + "Limitações: alguns streams usam formatos ou proteções que o Roku não reproduz. Não há DRM, ClearKey, telemetria, atualizador do APK ou Saimo Connect." + Chr(10) + Chr(10)
+    text = text + "Back volta."
+    m.aboutText.text = text
+    m.top.setFocus(true)
+end sub
+
+sub closeAbout()
+    m.aboutVisible = false
+    m.aboutGroup.visible = false
+    m.homeGroup.visible = true
+    focusListOrNav()
+end sub
+
+' ---------------------------------------------------------------------------
+' Player
+' ---------------------------------------------------------------------------

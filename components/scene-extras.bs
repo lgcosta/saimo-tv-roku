@@ -1,0 +1,334 @@
+' ---------------------------------------------------------------------------
+' Parte da cena principal: Listas M3U externas.
+' O ficheiro MainScene.bs guarda o ciclo de vida e o estado; este corre no
+' mesmo ambito de componente (as scripts do MainScene.xml partilham o escopo).
+' ---------------------------------------------------------------------------
+
+' ---------------------------------------------------------------------------
+' Listas M3U externas
+'
+' O utilizador pode acrescentar listas M3U de canais. Cada lista entra como
+' um grupo proprio na grelhe, ao lado da lista principal e dos Canais de
+' Portugal. Ficam guardadas no registry; so aparecem na grelhe se forem
+' descarregadas com exito.
+' ---------------------------------------------------------------------------
+
+function loadExtraPlaylists() as object
+    raw = readSetting("extraPlaylists")
+    if not isStringValue(raw) or raw = "" then return []
+    parsed = ParseJson(raw)
+    if type(parsed) <> "roArray" then return []
+    lists = []
+    for each item in parsed
+        if type(item) = "roAssociativeArray" then
+            name = strField(item, "name")
+            url = strField(item, "url")
+            ' BrightScript nao tem "continue": o corpo so corre se o url existir.
+            if url <> "" then
+                if name = "" then name = extraPlaylistNameFromUrl(url)
+                lists.Push({
+                    name: name
+                    url: url
+                    enabled: boolField(item, "enabled", true)
+                    lastSync: Val(strField(item, "lastSync"))
+                    count: Val(strField(item, "count"))
+                    error: strField(item, "error")
+                })
+            end if
+        end if
+    end for
+    return lists
+end function
+
+sub saveExtraPlaylists()
+    WriteAsciiFile("cachefs:/saimo_extra_playlists.json", FormatJson(m.extraPlaylists))
+    writeSetting("extraPlaylists", FormatJson(m.extraPlaylists))
+end sub
+
+function extraPlaylistNameFromUrl(url as string) as string
+    ' O nome da lista vem do dominio do endereco; se nao der, usa o fim.
+    clean = url.Trim()
+    if Left(LCase(clean), 7) = "http://" then clean = Mid(clean, 8)
+    if Left(LCase(clean), 8) = "https://" then clean = Mid(clean, 9)
+    slash = Instr(1, clean, "/")
+    if slash > 1 then clean = Left(clean, slash - 1)
+    if clean = "" then clean = "Lista M3U"
+    return clean
+end function
+
+sub addExtraPlaylist(url as string)
+    url = url.Trim()
+    if url = "" then return
+    if not (Left(LCase(url), 7) = "http://" or Left(LCase(url), 8) = "https://") then
+        showToastType("O endereco tem de comecar por http:// ou https://.", "error")
+        return
+    end if
+    for each existing in m.extraPlaylists
+        if LCase(existing.url) = LCase(url) then
+            showToastType("Essa lista ja esta configurada.", "error")
+            return
+        end if
+    end for
+    print "SAIMO_EXTRA adicionar " + url
+    name = extraPlaylistNameFromUrl(url)
+    suffix = 2
+    taken = true
+    while taken
+        taken = false
+        for each existing in m.extraPlaylists
+            if existing.name = name then taken = true
+        end for
+        if taken then
+            name = extraPlaylistNameFromUrl(url) + " " + Str(suffix).Trim()
+            suffix = suffix + 1
+        end if
+    end while
+    m.extraPlaylists.Push({ name: name, url: url, enabled: true, lastSync: 0, count: 0, error: "" })
+    saveExtraPlaylists()
+    ' Descarrega ja para confirmar que funciona antes de a mostrar.
+    if m.fetchTask <> invalid then
+        m.extraQueue.Push(m.extraPlaylists.Count() - 1)
+        m.extraPending = true
+        showToast("A carregar a nova lista...")
+    else
+        m.extraQueue = [m.extraPlaylists.Count() - 1]
+        startNextExtra()
+    end if
+end sub
+
+sub removeExtraPlaylist(index as integer)
+    if index < 0 or index >= m.extraPlaylists.Count() then return
+    removedName = m.extraPlaylists[index].name
+    m.extraPlaylists.Delete(index)
+    ' Os indices da fila reorganizam-se: o que estava depois do removido
+    ' passa a estar uma posicao antes.
+    remaining = []
+    for each idx in m.extraQueue
+        if idx > index then
+            remaining.Push(idx - 1)
+        else if idx <> index then
+            remaining.Push(idx)
+        end if
+    end for
+    m.extraQueue = remaining
+    saveExtraPlaylists()
+    print "SAIMO_EXTRA removida " + removedName
+    applyExtraChannels()
+    showToastType("Lista removida.", "success")
+end sub
+
+' Coloca na fila as listas extra que precisam de ser actualizadas.
+sub queueStaleExtras()
+    m.extraQueue = []
+    for i = 0 to m.extraPlaylists.Count() - 1
+        if m.extraPlaylists[i].enabled and isSyncStale(m.extraPlaylists[i].lastSync) then
+            m.extraQueue.Push(i)
+        end if
+    end for
+    ' Sem esta flag a cadeia de actualizacao nunca arranca a fila.
+    m.extraPending = m.extraQueue.Count() > 0
+end sub
+
+' Arranca a proxima lista extra da fila. Quando a fila esgota, a fase extra
+' termina e a cadeia de actualizacao continua para o catalogo VOD.
+sub startNextExtra()
+    if m.fetchTask <> invalid then
+        ' Ha outra tarefa em curso: a fila espera por ela.
+        m.extraPending = true
+        return
+    end if
+    for i = 0 to m.extraQueue.Count() - 1
+        idx = m.extraQueue[i]
+        if idx >= 0 and idx < m.extraPlaylists.Count() and m.extraPlaylists[idx].enabled then
+            m.extraIndex = idx
+            m.extraQueue.Delete(i)
+            m.extraPending = true
+            refreshExtraPlaylist(false)
+            return
+        end if
+    end for
+    m.extraPending = false
+end sub
+
+sub refreshExtraPlaylist(notify as boolean)
+    if m.fetchTask <> invalid then return
+    if m.extraIndex < 0 or m.extraIndex >= m.extraPlaylists.Count() then return
+    entry = m.extraPlaylists[m.extraIndex]
+    if not entry.enabled then return
+    if not startFetch("extra_playlist", entry.url, "", "", "", "") then return
+    m.status.text = "A carregar " + entry.name + "..."
+    if notify then showToast("A carregar " + entry.name + "...")
+end sub
+
+sub handleExtraPlaylistResult(task as object)
+    index = m.extraIndex
+    if index < 0 or index >= m.extraPlaylists.Count() then return
+    entry = m.extraPlaylists[index]
+    if saimoBaseUrl(strField(task, "baseUrl")) <> saimoBaseUrl(m.vodUrl) and strField(task, "url").Trim() <> entry.url then return
+
+    if task.success <> true then
+        entry.error = strField(task, "error")
+        if entry.error = "" then entry.error = "Nao foi possivel descarregar a lista."
+        m.extraPlaylists[index] = entry
+        saveExtraPlaylists()
+        m.status.text = entry.name + ": " + entry.error
+        print "SAIMO_EXTRA erro " + entry.error
+        applyExtraChannels()
+        startNextExtra()
+        return
+    end if
+
+    channels = ParseJson(task.resultJson)
+    if type(channels) <> "roArray" or channels.Count() = 0 then
+        entry.error = "A lista foi descarregada mas nao tem canais validos."
+        m.extraPlaylists[index] = entry
+        saveExtraPlaylists()
+        m.status.text = entry.name + ": " + entry.error
+        print "SAIMO_EXTRA erro " + entry.error
+        applyExtraChannels()
+        startNextExtra()
+        return
+    end if
+
+    entry.count = channels.Count()
+    entry.error = ""
+    clock = CreateObject("roDateTime")
+    entry.lastSync = clock.AsSeconds()
+    m.extraPlaylists[index] = entry
+    saveExtraPlaylists()
+
+    print "SAIMO_EXTRA ok count=" + Str(channels.Count()).Trim() + " url=" + entry.url
+    m.extraChannels = []
+    for each raw in channels
+        ch = normalizeChannel(raw)
+        if ch <> invalid then
+            ch.group = entry.name
+            m.extraChannels.Push(ch)
+        end if
+    end for
+    applyExtraChannels()
+    m.status.text = entry.name + ": " + Str(entry.count).Trim() + " canais."
+    showToastType(entry.name + ": " + Str(entry.count).Trim() + " canais.", "success")
+    startNextExtra()
+end sub
+
+sub applyExtraChannels()
+    m.channels = []
+    for each ch in m.mainChannels
+        m.channels.Push(ch)
+    end for
+    for each ch in m.portugalChannels
+        m.channels.Push(ch)
+    end for
+    for each ch in m.extraChannels
+        m.channels.Push(ch)
+    end for
+    buildGroups()
+    if m.selectedGroup <> "" and findGroup(m.selectedGroup) = invalid then m.selectedGroup = ""
+    buildNav(true)
+    if m.activeView = "channels" then
+        m.searchActive = false
+        populateChannels(m.selectedGroup, false)
+    end if
+    updateChannelStatus()
+end sub
+sub applyChannels(rawChannels as object, forceFocus as boolean)
+    normalized = []
+    for each raw in rawChannels
+        ch = normalizeChannel(raw)
+        if ch <> invalid then normalized.Push(ch)
+    end for
+    if normalized.Count() = 0 then
+        if m.activeView = "channels" then showEmptyState("A lista não possui canais válidos.")
+        return
+    end if
+
+    wasChannels = m.activeView = "channels"
+    m.mainChannels = normalized
+    applyExtraChannels()
+    buildGroups()
+    if m.selectedGroup <> "" and findGroup(m.selectedGroup) = invalid then m.selectedGroup = ""
+    buildNav(true)
+    if wasChannels then
+        m.searchActive = false
+        populateChannels(m.selectedGroup, forceFocus)
+    end if
+    updateChannelStatus()
+end sub
+
+' Junta a lista principal do usuario com a lista fixa de Portugal. As duas
+' convivem: a categoria de Portugal e apenas mais um grupo entre os outros.
+sub mergeChannels()
+    m.channels = []
+    for each ch in m.mainChannels
+        m.channels.Push(ch)
+    end for
+    for each ch in m.portugalChannels
+        m.channels.Push(ch)
+    end for
+end sub
+
+sub applyPortugalChannels(rawChannels as object, forceFocus as boolean)
+    normalized = []
+    for each raw in rawChannels
+        ch = normalizeChannel(raw)
+        if ch <> invalid then normalized.Push(ch)
+    end for
+    if normalized.Count() = 0 then return
+
+    wasChannels = m.activeView = "channels"
+    m.portugalChannels = normalized
+    mergeChannels()
+    buildGroups()
+    if m.selectedGroup <> "" and findGroup(m.selectedGroup) = invalid then m.selectedGroup = ""
+    buildNav(true)
+    if wasChannels then
+        m.searchActive = false
+        populateChannels(m.selectedGroup, forceFocus)
+    end if
+    updateChannelStatus()
+end sub
+
+sub updateChannelStatus()
+    m.status.text = Str(m.channels.Count()).Trim() + " canais  •  " + Str(m.groups.Count()).Trim() + " grupos  •  " + playlistSyncLabel()
+end sub
+
+function normalizeChannel(raw as object) as object
+    if type(raw) <> "roAssociativeArray" then return invalid
+    title = strField(raw, "title").Trim()
+    if title = "" then return invalid
+    group = strField(raw, "group").Trim()
+    if group = "" then group = "Canais"
+    sourcesRaw = raw.sources
+    if type(sourcesRaw) <> "roArray" then return invalid
+
+    sources = []
+    for each rawSource in sourcesRaw
+        if type(rawSource) = "roAssociativeArray" then
+            url = strField(rawSource, "url").Trim()
+            if isValidUrl(url) and not isDeadUrl(url) then
+                source = {
+                    url: url
+                    referer: strField(rawSource, "referer")
+                    origin: strField(rawSource, "origin")
+                    userAgent: strField(rawSource, "userAgent")
+                    name: strField(rawSource, "name")
+                    quality: strField(rawSource, "quality")
+                    streamFormat: strField(rawSource, "streamFormat")
+                    isLive: boolField(rawSource, "isLive", true)
+                }
+                sources.Push(source)
+            end if
+        end if
+    end for
+    if sources.Count() = 0 then return invalid
+
+    return {
+        title: title
+        logo: strField(raw, "logo")
+        group: group
+        tvgId: strField(raw, "tvgId")
+        sources: sources
+        isLive: true
+    }
+end function

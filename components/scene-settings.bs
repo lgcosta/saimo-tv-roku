@@ -1,0 +1,341 @@
+' ---------------------------------------------------------------------------
+' Parte da cena principal: Ajustes.
+' O ficheiro MainScene.bs guarda o ciclo de vida e o estado; este corre no
+' mesmo ambito de componente (as scripts do MainScene.xml partilham o escopo).
+' ---------------------------------------------------------------------------
+
+sub openSettings()
+    if m.playerVisible then return
+    m.settingsVisible = true
+    m.homeGroup.visible = false
+    m.guideGroup.visible = false
+    m.aboutGroup.visible = false
+    m.settingsGroup.visible = true
+    buildSettings()
+    m.settingsList.setFocus(true)
+end sub
+
+sub closeSettings()
+    m.settingsVisible = false
+    m.settingsGroup.visible = false
+    m.homeGroup.visible = true
+    focusListOrNav()
+end sub
+
+sub buildSettings()
+    entries = []
+    entries.Push({ title: "URL da lista M3U de canais", key: "playlist", help: "Lista de canais ao vivo. Este endereço é independente do catálogo VOD." })
+    entries.Push({ title: "Adicionar lista M3U", key: "addPlaylist", help: "Acrescenta uma lista M3U de canais ao app. A lista entra como um grupo próprio na grelha, ao lado da sua lista principal e dos Canais de Portugal. Só fica visível se for descarregada com êxito." })
+    for i = 0 to m.extraPlaylists.Count() - 1
+        entry = m.extraPlaylists[i]
+        status = "desactivada"
+        if entry.enabled then
+            if entry.error <> "" then
+                status = "sem resposta: " + entry.error
+            else
+                status = Str(entry.count).Trim() + " canais"
+            end if
+        end if
+        entries.Push({ title: entry.name, key: "extraPlaylist", index: i, help: "Lista M3U externa." + Chr(10) + "Endereço: " + entry.url + Chr(10) + "Estado: " + status })
+    end for
+    entries.Push({ title: "Canais de Portugal (M3UPT)", key: "portugal", help: "Lista fixa que entra no app ao lado da sua: TV, rádios e beachcams portugueses, com os cabeçalhos que cada emissor exige. Não substitui a sua lista." })
+    entries.Push({ title: "Fonte do catálogo de filmes e séries", key: "vod", help: "Padrão: catálogo Saimo, dividido por letras e atualizado pela rede. Também aceita uma URL de lista M3U/M3U8 autorizada. Endereço: https://saimo-filmes.pages.dev/" })
+    entries.Push({ title: "Atualizar catálogo VOD agora", key: "vodrefresh", help: "Sincroniza filmes e séries imediatamente. Em segundo plano, o app verifica a cada 15 minutos e baixa quando o cache tem mais de 6 horas." })
+    entries.Push({ title: "URL do EPG XMLTV (opcional)", key: "epg", help: "Endereço do guia XMLTV. Pode ficar vazio." })
+    entries.Push({ title: "User-Agent HTTP", key: "ua", help: "Agente enviado nas requisições de listas e ao player." })
+    entries.Push({ title: "Usar catálogo público Saimo (canais)", key: "preset", help: "Define a lista pública de canais como fonte. Ação explícita; nada é carregado sozinho." })
+    entries.Push({ title: "Recarregar lista de canais", key: "refresh", help: "Baixa a lista de canais configurada novamente." })
+    entries.Push({ title: "Limpar cache local", key: "cache", help: "Apaga cache de canais, filmes, séries e EPG. Não apaga favoritos nem ajustes." })
+    entries.Push({ title: "Testar player com HLS público", key: "hls", help: "Abre um stream HLS de teste para confirmar o player." })
+    entries.Push({ title: "Testar player com MP4 público", key: "mp4", help: "Abre um MP4 de teste. Use este teste se o HLS falhar." })
+    entries.Push({ title: "Sobre o app", key: "about", help: "Informações sobre o cliente e o que ele não faz." })
+    entries.Push({ title: "Voltar", key: "back", help: "Retorna aos canais." })
+    m.settingsEntries = entries
+
+    root = CreateObject("roSGNode", "ContentNode")
+    for each entry in entries
+        item = root.CreateChild("ContentNode")
+        item.title = entry.title
+    end for
+    m.settingsList.content = root
+    m.settingsList.jumpToItem = 0
+    m.settingsHelp.text = settingsHelpText(entries[0])
+end sub
+
+function settingsHelpText(entry as object) as string
+    text = entry.help
+    if entry.key = "playlist" then
+        text = text + Chr(10) + Chr(10) + "Atual: " + valueOrEmpty(m.playlistUrl)
+        text = text + Chr(10) + "Estado: " + playlistSyncLabel()
+    else if entry.key = "addPlaylist" then
+        text = text + Chr(10) + Chr(10) + "Listas configuradas: " + Str(m.extraPlaylists.Count()).Trim()
+    else if entry.key = "extraPlaylist" then
+        index = Val(strField(entry, "index"))
+        if index >= 0 and index < m.extraPlaylists.Count() then
+            item = m.extraPlaylists[index]
+            text = text + Chr(10) + Chr(10) + "Endereço: " + item.url
+            if item.enabled then
+                text = text + Chr(10) + "Estado: activada"
+            else
+                text = text + Chr(10) + "Estado: desactivada"
+            end if
+            if item.error <> "" then text = text + Chr(10) + "Erro: " + item.error
+            if item.lastSync > 0 then text = text + Chr(10) + "Actualizado há " + relativeAge(item.lastSync)
+            text = text + Chr(10) + "Canais: " + Str(item.count).Trim()
+        end if
+    else if entry.key = "portugal" then
+        text = text + Chr(10) + Chr(10) + "Endereço: " + m3uptPlaylistUrl()
+        text = text + Chr(10) + "Canais: " + Str(m.portugalChannels.Count()).Trim()
+        if m.portugalLastSync <= 0 then
+            text = text + Chr(10) + "Estado: Ainda não sincronizado"
+        else
+            text = text + Chr(10) + "Estado: Atualizado há " + relativeAge(m.portugalLastSync)
+        end if
+    else if entry.key = "epg" then
+        text = text + Chr(10) + Chr(10) + "Atual: " + valueOrEmpty(m.epgUrl)
+    else if entry.key = "ua" then
+        text = text + Chr(10) + Chr(10) + "Atual: " + valueOrEmpty(m.userAgent)
+    else if entry.key = "vod" then
+        text = text + Chr(10) + Chr(10) + "Fonte atual: " + valueOrEmpty(m.vodUrl)
+        if isSaimoVodUrl(m.vodUrl) then
+            text = text + Chr(10) + "Fragmentos em cache: " + Str(m.saimoIndexLetters.Count()).Trim() + " letras"
+        else
+            text = text + Chr(10) + "Itens em cache: " + Str(m.vodAll.Count()).Trim()
+        end if
+        text = text + Chr(10) + "Estado: " + vodSyncLabel()
+    else if entry.key = "vodrefresh" then
+        text = text + Chr(10) + Chr(10) + "Itens atuais: " + Str(m.vodAll.Count()).Trim()
+        text = text + Chr(10) + "Estado: " + vodSyncLabel()
+    end if
+    return text
+end function
+
+function valueOrEmpty(value as string) as string
+    if value = invalid or value = "" then return "(vazio)"
+    return value
+end function
+
+sub onSettingsFocused()
+    index = m.settingsList.itemFocused
+    if index >= 0 and index < m.settingsEntries.Count() then
+        m.settingsHelp.text = settingsHelpText(m.settingsEntries[index])
+    end if
+end sub
+
+sub onSettingsSelected()
+    index = m.settingsList.itemSelected
+    if index < 0 or index >= m.settingsEntries.Count() then return
+    key = m.settingsEntries[index].key
+    print "SAIMO_AJUSTES " + key
+
+    if key = "playlist" then
+        editSetting("playlist", "URL da lista M3U de canais", m.playlistUrl)
+    else if key = "addPlaylist" then
+        editSetting("addPlaylist", "Endereço da nova lista M3U", "")
+    else if key = "extraPlaylist" then
+        editExtraPlaylist(Val(strField(m.settingsEntries[index], "index")))
+    else if key = "portugal" then
+        closeSettings()
+        m.portugalInitPending = false
+        refreshPortugal(true)
+    else if key = "vod" then
+        editSetting("vod", "Fonte do catálogo (Saimo ou M3U)", m.vodUrl)
+    else if key = "vodrefresh" then
+        closeSettings()
+        refreshVodCatalog(true)
+    else if key = "epg" then
+        editSetting("epg", "URL do EPG XMLTV", m.epgUrl)
+    else if key = "ua" then
+        editSetting("ua", "User-Agent HTTP", m.userAgent)
+    else if key = "preset" then
+        m.playlistUrl = m.publicCatalog
+        writeSetting("playlistUrl", m.playlistUrl)
+        closeSettings()
+        refreshPlaylist(true)
+    else if key = "refresh" then
+        closeSettings()
+        m.portugalInitPending = true
+        refreshPlaylist(true)
+    else if key = "cache" then
+        clearCache()
+    else if key = "hls" then
+        closeSettings()
+        playTest("hls")
+    else if key = "mp4" then
+        closeSettings()
+        playTest("mp4")
+    else if key = "about" then
+        openAbout()
+    else if key = "back" then
+        closeSettings()
+    end if
+end sub
+
+sub editExtraPlaylist(index as integer)
+    if index < 0 or index >= m.extraPlaylists.Count() then return
+    entry = m.extraPlaylists[index]
+    dialog = CreateObject("roSGNode", "KeyboardDialog")
+    dialog.title = entry.name
+    dialog.buttons = ["Actualizar", "Remover", "Cancelar"]
+    dialog.text = entry.url
+    dialog.observeField("buttonSelected", "onExtraPlaylistButton")
+    dialog.observeField("wasClosed", "onDialogClosed")
+    m.editDialog = dialog
+    m.extraEditIndex = index
+    showModalDialog(dialog)
+end sub
+
+sub onExtraPlaylistButton()
+    if m.editDialog = invalid then return
+    button = m.editDialog.buttonSelected
+    value = m.editDialog.text
+    if value = invalid then value = ""
+    index = m.extraEditIndex
+    closeDialog()
+    if index < 0 or index >= m.extraPlaylists.Count() then return
+    if button = 0 then
+        ' Actualizar o endereco
+        if value.Trim() <> "" then
+            m.extraPlaylists[index].url = value.Trim()
+            m.extraPlaylists[index].error = ""
+            m.extraPlaylists[index].lastSync = 0
+            saveExtraPlaylists()
+            m.extraIndex = index
+            refreshExtraPlaylist(false)
+        end if
+    else if button = 1 then
+        removeExtraPlaylist(index)
+    end if
+end sub
+
+' Um Dialog so e modal (e so recebe o foco das teclas) quando e atribuido
+' ao campo "dialog" da cena. Acrescentar o no como filho da cena deixa o
+' foco no componente de tras e o teclado nunca chega ao dialogo.
+sub showModalDialog(dialog as object)
+    m.dialog = dialog
+    m.top.dialog = dialog
+end sub
+
+sub editSetting(key as string, title as string, initial as string)
+    dialog = CreateObject("roSGNode", "KeyboardDialog")
+    dialog.title = title
+    dialog.buttons = ["Salvar", "Cancelar"]
+    dialog.text = initial
+    dialog.observeField("buttonSelected", "onEditSettingButton")
+    dialog.observeField("wasClosed", "onDialogClosed")
+    m.editDialog = dialog
+    m.editKey = key
+    showModalDialog(dialog)
+end sub
+
+sub onEditSettingButton()
+    if m.editDialog = invalid then return
+    index = m.editDialog.buttonSelected
+    value = m.editDialog.text
+    if value = invalid then value = ""
+    key = m.editKey
+    closeDialog()
+    if index <> 0 then return
+
+    if key = "addPlaylist" then
+        addExtraPlaylist(value)
+        if m.settingsVisible then
+            buildSettings()
+            m.settingsList.setFocus(true)
+        end if
+    else if key = "playlist" then
+        m.playlistUrl = value.Trim()
+        writeSetting("playlistUrl", m.playlistUrl)
+        closeSettings()
+        if m.playlistUrl = "" then
+            showEmptyState("Nenhuma lista configurada.")
+        else
+            refreshPlaylist(true)
+        end if
+    else if key = "vod" then
+        m.vodUrl = value.Trim()
+        if m.vodUrl = "" then m.vodUrl = m.defaultVodUrl
+        lowNewVod = LCase(m.vodUrl)
+        if Instr(1, lowNewVod, "filmes-saimo.pages.dev") > 0 or Instr(1, lowNewVod, "saimoplayer/main/vod") > 0 then m.vodUrl = m.defaultVodUrl
+        writeSetting("vodUrl", m.vodUrl)
+        m.vodLastSync = 0
+        writeSetting("vodLastSync", "0")
+        loadCachedVodCatalog()
+        if m.vodUrl <> "" then
+            m.vodRefreshTimer.control = "start"
+            refreshVodCatalog(true)
+        else
+            m.vodRefreshTimer.control = "stop"
+            m.vodAll = []
+            m.vodMovies = []
+            m.vodSeries = []
+            m.vodVisibleItems = []
+            m.vodLoaded = false
+            m.vodGrid.content = CreateObject("roSGNode", "ContentNode")
+            showToast("URL do catálogo VOD removida.")
+        end if
+        if m.settingsVisible then
+            buildSettings()
+            m.settingsList.setFocus(true)
+        end if
+    else if key = "epg" then
+        m.epgUrl = value.Trim()
+        writeSetting("epgUrl", m.epgUrl)
+        m.epg = {}
+        m.epgLoaded = false
+        m.epgUnsupported = false
+        writeSetting("epgUnsupported", "0")
+        if m.epgUrl <> "" then loadEpg()
+        showToastType("EPG atualizado.", "success")
+        if m.settingsVisible then m.settingsList.setFocus(true)
+    else if key = "ua" then
+        if value.Trim() = "" then
+            m.userAgent = m.defaultUA
+        else
+            m.userAgent = value.Trim()
+        end if
+        writeSetting("userAgent", m.userAgent)
+        showToastType("User-Agent salvo.", "success")
+        if m.settingsVisible then m.settingsList.setFocus(true)
+    end if
+end sub
+
+sub closeDialog()
+    if m.dialog <> invalid then
+        dialog = m.dialog
+        m.top.dialog = invalid
+        dialog.close = true
+    end if
+    m.dialog = invalid
+    m.editDialog = invalid
+    restoreFocusAfterDialog()
+end sub
+
+' O sistema fecha o dialogo sozinho quando se prime Back ou Home. A app
+' tem de mudar de estado tambem, senao fica a achar que ha dialogo aberto.
+sub onDialogClosed()
+    if m.dialog = invalid then return
+    m.dialog = invalid
+    m.editDialog = invalid
+    restoreFocusAfterDialog()
+end sub
+
+sub restoreFocusAfterDialog()
+    if m.settingsVisible then
+        m.settingsList.setFocus(true)
+    else if m.activeView = "vod" or m.activeView = "vod_episodes" or m.activeView = "saimo_home" or m.activeView = "saimo_catalog" or m.activeView = "saimo_episodes" or m.activeView = "saimo_episodes_loading" then
+        if m.vodVisibleItems.Count() > 0 then
+            m.vodGrid.setFocus(true)
+        else
+            m.navList.setFocus(true)
+        end if
+    else if m.itemList.content <> invalid then
+        m.itemList.setFocus(true)
+    else
+        m.navList.setFocus(true)
+    end if
+end sub
+
+' ---------------------------------------------------------------------------
+' Guia / EPG
+' ---------------------------------------------------------------------------

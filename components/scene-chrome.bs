@@ -1,0 +1,455 @@
+' ---------------------------------------------------------------------------
+' Parte da cena principal: Cromo da tela, Renderizacao da lista, Canal em foco, Toast.
+' O ficheiro MainScene.bs guarda o ciclo de vida e o estado; este corre no
+' mesmo ambito de componente (as scripts do MainScene.xml partilham o escopo).
+' ---------------------------------------------------------------------------
+
+sub setViewHeader(eyebrow as string, title as string, subText as string)
+    m.shelfList.visible = false
+    ' A grelhe de canais so existe na vista "Ao vivo". Qualquer outra
+    ' chamada a setViewHeader esconde-a, senao os logos ficam por cima
+    ' das prateleiras do Descobrir.
+    if m.channelGrid <> invalid then m.channelGrid.visible = false
+    if m.vodDetailGroup <> invalid then m.vodDetailGroup.visible = false
+    if m.listEyebrow <> invalid then m.listEyebrow.text = eyebrow
+    if m.listTitle <> invalid then m.listTitle.text = title
+    if m.listSub <> invalid then m.listSub.text = subText
+end sub
+
+' Fundo proprio da ficha: cover http vira uri do fichaBackdrop; qualquer
+' outra coisa (vazio, pkg:, caminho invalido) esconde a imagem de fundo.
+sub showFichaBackdrop(cover as string)
+    if m.fichaBackdrop = invalid then return
+    if Left(cover, 4) = "http" then
+        m.fichaBackdrop.uri = cover
+        m.fichaBackdrop.visible = true
+    else
+        m.fichaBackdrop.uri = ""
+        m.fichaBackdrop.visible = false
+    end if
+end sub
+
+sub updateClock()
+    if m.clock = invalid then return
+    now = CreateObject("roDateTime")
+    now.ToLocalTime()
+    m.clock.text = pad2(now.GetHours()) + ":" + pad2(now.GetMinutes())
+end sub
+
+sub updateSyncHint()
+    if m.syncHint = invalid then return
+    m.syncHint.text = syncHintText()
+end sub
+
+function syncHintText() as string
+    if m.activeView = "channels" then
+        if m.playlistLastSync <= 0 then return "CANAIS  •  Ainda não sincronizado"
+        if playlistIsStale() then return "CANAIS  •  Atualização pendente"
+        return "CANAIS  •  Atualizado " + relativeAge(m.playlistLastSync)
+    end if
+    if m.vodRefreshing then return "CATÁLOGO  •  Sincronizando agora..."
+    if m.vodLastSync <= 0 then return "CATÁLOGO  •  Ainda não sincronizado"
+    if vodIsStale() then return "CATÁLOGO  •  Atualização pendente"
+    return "CATÁLOGO  •  Atualizado " + relativeAge(m.vodLastSync)
+end function
+
+sub updateChrome()
+    if m.syncHint <> invalid then m.syncHint.color = m.palette.textSecondary
+    if m.clock <> invalid then m.clock.color = m.palette.textPrimary
+    if m.hint <> invalid then m.hint.color = m.palette.textSecondary
+    updateClock()
+    updateSyncHint()
+end sub
+
+sub onNavSelected()
+    index = m.navList.itemSelected
+    if index < 0 or index >= m.navEntries.Count() then return
+    entry = m.navEntries[index]
+    kind = entry.kind
+
+    if kind = "header" then
+        if m.itemList.content <> invalid then m.itemList.setFocus(true)
+        return
+    end if
+
+    if kind = "view" and entry.value = "channels" then
+        m.activeView = "channels"
+        m.searchActive = false
+        populateChannels(m.selectedGroup, true)
+    else if kind = "view" and entry.value = "discover" then
+        openVodHome("all")
+    else if kind = "view" and entry.value = "catalog" then
+        openCatalog()
+    else if kind = "view" and entry.value = "movies" then
+        openMovies()
+    else if kind = "view" and entry.value = "series" then
+        openSeries()
+    else if kind = "view" and entry.value = "favorites" then
+        m.favoriteReturnView = m.activeView
+        m.favoriteReturnFilter = m.vodFilter
+        showVodFavorites()
+    else if kind = "search" then
+        openSearchDialog()
+    else if kind = "guide" then
+        openGuide()
+    else if kind = "settings" then
+        openSettings()
+    else if kind = "refresh" then
+        if m.playlistUrl = "" then
+            openSettings()
+        else
+            if m.vodUrl <> "" then m.vodInitPending = true
+            m.portugalInitPending = true
+            refreshPlaylist(true)
+        end if
+    else if kind = "group" then
+        m.activeView = "channels"
+        m.searchActive = false
+        populateChannels(entry.value, true)
+    end if
+end sub
+
+sub populateChannels(groupName as string, forceFocus as boolean)
+    previousIndex = m.itemList.itemFocused
+    m.activeView = "channels"
+    m.searchActive = false
+    m.itemList.visible = false
+    m.vodGrid.visible = false
+    m.episodeGrid.visible = false
+    m.selectedGroup = groupName
+    m.listEntries = []
+    m.visibleChannels = []
+    sourceTotal = 0
+
+    for each ch in m.channels
+        if channelInGroup(ch, groupName) then
+            m.visibleChannels.Push(ch)
+            m.listEntries.Push({ kind: "channel", data: ch })
+            sourceTotal = sourceTotal + ch.sources.Count()
+        end if
+    end for
+
+    title = "Todos os canais"
+    if groupName <> "" then title = groupName
+    print "SAIMO_GRUPO [" + title + "] canais=" + Str(m.visibleChannels.Count()).Trim()
+    setViewHeader("AO VIVO", title, Str(m.visibleChannels.Count()).Trim() + " canais  •  " + Str(sourceTotal).Trim() + " fontes  •  OK abre")
+    m.emptyLabel.text = "Nenhum canal neste grupo."
+    buildChannelGrid()
+    ' A grelhe so aparece depois do cabecalho: setViewHeader esconde todas
+    ' as listas para trocar de vista, e o "Ao vivo" e a unico que usa a
+    ' grelhe de canais.
+    m.channelGrid.visible = true
+
+    ' Uma atualizacao em segundo plano preserva o item em foco.
+    focusIndex = 0
+    if not forceFocus and previousIndex >= 0 and previousIndex < m.channelGrid.content.Count() then focusIndex = previousIndex
+    if m.channelGrid.content.Count() > 0 then
+        if not forceFocus and focusIndex > 0 then m.channelGrid.jumpToItem = focusIndex
+    end if
+    if forceFocus and not m.settingsVisible and not m.guideVisible and not m.aboutVisible then
+        m.channelGrid.setFocus(true)
+    end if
+end sub
+
+' Monta a grade de canais: logo, nome, programa em andamento e progresso.
+' Os canais principais (Globo, SBT, Band, Record...) ficam primeiro.
+sub buildChannelGrid()
+    root = CreateObject("roSGNode", "ContentNode")
+    ordered = sortChannelsByPriority(m.visibleChannels)
+    ' A ordem da grelhe e a ordem priorizada: o indice gravado no item
+    ' refere-se a esta lista, nao a m.visibleChannels.
+    m.orderedChannels = ordered
+
+    index = -1
+    for each ch in ordered
+        index = index + 1
+        item = root.CreateChild("ContentNode")
+        item.hdGridPosterUrl = ch.logo
+        item.hdPosterUrl = ch.logo
+        item.title = ch.title
+        item.channelIndex = index
+        item.shortDescriptionLine1 = ch.title
+        meta = ch.group
+        if channelIsFavorite(ch) then meta = "★ " + meta
+        item.shortDescriptionLine2 = meta
+        ' O ContentNode deste firmware so aceita um conjunto fixo de campos:
+        ' "shortDescriptionLine3/4" e "shortDescription" nao existem, e campos
+        ' com nome proprio tambem nao. "description" e aceite e nao e usado
+        ' por mais nada, por isso e ai que vai o programa em andamento.
+        item.description = channelNowText(ch)
+    end for
+
+    m.channelGrid.content = root
+    m.emptyLabel.visible = m.visibleChannels.Count() = 0
+end sub
+
+' Ordena os canais: os prioritarios primeiro, os restantes por nome.
+function sortChannelsByPriority(channels as object) as object
+    if type(channels) <> "roArray" then return channels
+    priKeys = []
+    byPri = {}
+    otherKeys = []
+    byOther = {}
+    for each ch in channels
+        priority = channelPriorityKey(ch.title)
+        if priority > 0 then
+            ' BrightScript nao tem PadLeft: preenche-se a mao.
+            key = Str(priority).Trim()
+            while Len(key) < 4
+                key = "0" + key
+            end while
+            if byPri[key] = invalid then
+                byPri[key] = ch
+                priKeys.Push(key)
+            end if
+        else
+            key = LCase(foldText(ch.title))
+            if byOther[key] = invalid then
+                byOther[key] = ch
+                otherKeys.Push(key)
+            end if
+        end if
+    end for
+    priKeys.Sort()
+    otherKeys.Sort()
+    result = []
+    for each key in priKeys
+        result.Push(byPri[key])
+    end for
+    for each key in otherKeys
+        result.Push(byOther[key])
+    end for
+    return result
+end function
+
+' ---------------------------------------------------------------------------
+' Renderizacao da lista e previa
+' ---------------------------------------------------------------------------
+
+sub renderEntries(resetPosition as boolean)
+    root = CreateObject("roSGNode", "ContentNode")
+    for each entry in m.listEntries
+        item = root.CreateChild("ContentNode")
+        if entry.kind = "header" then
+            item.title = "  " + entry.title
+        else if entry.kind = "channel" then
+            ch = entry.data
+            prefix = ""
+            if m.favorites[ch.title] = true then prefix = "◊ "
+            item.title = prefix + ch.title
+            if ch.tvgId <> "" and m.epg[ch.tvgId] <> invalid then
+                programme = m.epg[ch.tvgId]
+                programmeTitle = strField(programme, "nowTitle")
+                if programmeTitle <> "" then item.title = item.title + "  •  " + programmeTitle
+                if Val(strField(programme, "nowStop")) > Val(strField(programme, "nowStart")) then
+                    elapsed = CreateObject("roDateTime").AsSeconds() - Val(strField(programme, "nowStart"))
+                    duration = Val(strField(programme, "nowStop")) - Val(strField(programme, "nowStart"))
+                    percent = Int(100 * elapsed / duration)
+                    if percent < 0 then percent = 0
+                    if percent > 100 then percent = 100
+                    item.title = item.title + "  ·  " + Str(percent).Trim() + "%"
+                end if
+            end if
+        else if entry.kind = "movie" or entry.kind = "vod" then
+            itemData = entry.data
+            title = strField(itemData, "title")
+            year = strField(itemData, "year")
+            if year <> "" and Instr(1, title, "(" + year + ")") = 0 then title = title + "  (" + year + ")"
+            item.title = title
+        else if entry.kind = "saimo_letter" then
+            letterRow = entry.data
+            letterTitle = strField(letterRow, "letter")
+            movieCount = Val(strField(letterRow, "moviesCount"))
+            seriesCount = Val(strField(letterRow, "seriesCount"))
+            if m.vodFilter = "movies" then
+                item.title = letterTitle + "     " + Str(movieCount).Trim() + " filmes"
+            else if m.vodFilter = "series" then
+                item.title = letterTitle + "     " + Str(seriesCount).Trim() + " séries"
+            else
+                item.title = letterTitle + "     " + Str(movieCount).Trim() + " filmes  •  " + Str(seriesCount).Trim() + " séries"
+            end if
+        else if entry.kind = "saimo_search_result" then
+            itemData = entry.data
+            title = strField(itemData, "title")
+            year = strField(itemData, "year")
+            if year <> "" then title = title + "  (" + year + ")"
+            if strField(itemData, "type") = "series" then title = "Série  •  " + title
+            item.title = title
+        end if
+    end for
+
+    m.itemList.content = root
+    if resetPosition and m.listEntries.Count() > 0 then m.itemList.jumpToItem = 0
+    empty = m.listEntries.Count() = 0
+    m.emptyLabel.visible = empty
+end sub
+
+' ---------------------------------------------------------------------------
+' Canal em foco
+'
+' A barra lateral mostra o canal que esta em foco: nome, grupo e o programa
+' em andamento com o progresso. E o que resta depois de a preview em video
+' ter sido retirada (gastava um segundo descodificador e tapava a grelhe).
+' ---------------------------------------------------------------------------
+
+' Programa em andamento de um canal, com o progresso: "Novela  42%".
+function channelNowText(channel as object) as string
+    if channel = invalid then return ""
+    tvgId = strField(channel, "tvgId")
+    if tvgId = "" then return ""
+    programme = m.epg[tvgId]
+    if type(programme) <> "roAssociativeArray" then return ""
+    text = strField(programme, "nowTitle")
+    if text = "" then return ""
+    startTime = Val(strField(programme, "nowStart"))
+    stopTime = Val(strField(programme, "nowStop"))
+    if stopTime > startTime then
+        elapsed = CreateObject("roDateTime").AsSeconds() - startTime
+        percent = Int(100 * elapsed / (stopTime - startTime))
+        if percent < 0 then percent = 0
+        if percent > 100 then percent = 100
+        text = text + "  " + Str(percent).Trim() + "%"
+    end if
+    return text
+end function
+
+sub onChannelFocused()
+    index = m.channelGrid.itemFocused
+    if index < 0 or index >= m.orderedChannels.Count() then return
+    channel = m.orderedChannels[index]
+    text = channel.title
+    if channel.group <> "" then text = text + Chr(10) + channel.group
+    programme = channelNowText(channel)
+    if programme <> "" then text = text + Chr(10) + programme
+    m.status.text = text
+end sub
+
+sub onChannelSelected()
+    index = m.channelGrid.itemSelected
+    if index < 0 then return
+    node = m.channelGrid.content.GetChild(index)
+    if node = invalid then return
+    ' O item guarda o indice na lista ordenada, que e a ordem da grelhe.
+    channelIndex = Val(strField(node, "channelIndex"))
+    if channelIndex < 0 or channelIndex >= m.orderedChannels.Count() then return
+    visible = m.orderedChannels[channelIndex]
+    m.status.text = "Abrindo " + visible.title + "..."
+    playChannel(visible, 0)
+end sub
+
+sub onItemSelected()
+    index = m.itemList.itemSelected
+    if index < 0 or index >= m.listEntries.Count() then return
+    entry = m.listEntries[index]
+    if entry.kind = "header" then return
+
+    if entry.kind = "saimo_letter" then
+        loadSaimoLetter(entry.data.letter)
+    else if entry.kind = "saimo_search_result" then
+        m.vodFilter = "movies"
+        if strField(entry.data, "type") = "series" then m.vodFilter = "series"
+        openSaimoEntry(entry.data, "search", index)
+    else if entry.kind = "channel" then
+        m.status.text = "Abrindo " + entry.data.title + "..."
+        playChannel(entry.data, 0)
+    else if entry.kind = "movie" or entry.kind = "vod" then
+        data = entry.data
+        itemType = LCase(strField(data, "type"))
+        if itemType = "series" and (strField(data, "sourceType") = "saimo" or (strField(data, "letter") <> "" and strField(data, "piece") <> "")) then
+            m.seriesDetailReturnView = "search"
+            m.seriesDetailReturnIndex = index
+            loadSaimoEpisodes(data)
+        else if itemType = "series" and type(data.episodes) = "roArray" and data.episodes.Count() > 0 then
+            showSeriesEpisodes(data, "search", index)
+        else if itemType = "series" then
+            showSeriesDetails(data, [], "vod_episodes", "search", index)
+        else
+            showVodMovieDetails(data, "search", index)
+        end if
+    end if
+end sub
+
+sub showEmptyState(message as string)
+    m.itemList.visible = true
+    m.channelGrid.visible = false
+    m.vodGrid.visible = false
+    m.episodeGrid.visible = false
+    m.listEntries = []
+    m.visibleChannels = []
+    renderEntries(false)
+    setViewHeader("AO VIVO", "Canais", "Nenhum conteúdo carregado")
+    m.emptyLabel.text = message + Chr(10) + Chr(10) + "Abra Ajustes para configurar sua lista de canais e, separadamente, o catálogo VOD autorizado."
+    m.emptyIcon.visible = true
+    m.emptyAction.visible = true
+    m.status.text = message
+    if not m.settingsVisible and not m.guideVisible and not m.aboutVisible then
+        m.navList.setFocus(true)
+    end if
+end sub
+
+' ---------------------------------------------------------------------------
+' Filmes
+' ---------------------------------------------------------------------------
+
+' Barra de progresso para as descargas longas (letras do catalogo).
+' A barra e deterministica: avanca em passos ate 90% e so fecha quando
+' a tarefa acaba, por isso nunca fica a 100% com o trabalho a meio.
+sub showLoadProgress(label as string)
+    if m.loadProgress = invalid then return
+    m.loadLabel = label
+    m.loadBarWidth = 60
+    m.loadBar.width = m.loadBarWidth
+    m.loadText.text = label
+    m.loadProgress.visible = true
+    if m.hint <> invalid then m.hint.visible = false
+end sub
+
+sub hideLoadProgress()
+    if m.loadProgress = invalid then return
+    m.loadProgress.visible = false
+    m.loadBarWidth = 0
+    if m.hint <> invalid then m.hint.visible = true
+end sub
+
+sub animateLoadProgress()
+    if m.loadProgress = invalid then return
+    if not m.loadProgress.visible then return
+    m.loadBarWidth = m.loadBarWidth + 55
+    if m.loadBarWidth > 900 then m.loadBarWidth = 900
+    m.loadBar.width = m.loadBarWidth
+end sub
+
+sub showToast(message as string)
+    showToastType(message, "info")
+end sub
+
+sub showToastType(message as string, kind as string)
+    if message = "" then return
+    m.toast.text = message
+    if kind = "success" then
+        m.toastIcon.text = "√"
+        m.toastAccent.color = m.palette.accent
+        m.toastIcon.color = m.palette.accent
+    else if kind = "error" then
+        m.toastIcon.text = "!"
+        m.toastAccent.color = m.palette.live
+        m.toastIcon.color = m.palette.live
+    else
+        m.toastIcon.text = "i"
+        m.toastAccent.color = m.palette.textSecondary
+        m.toastIcon.color = m.palette.textSecondary
+    end if
+    m.toastAccent.visible = true
+    m.toastBg.visible = true
+    m.toast.visible = true
+    m.toastIcon.visible = true
+    m.toastTimer.control = "stop"
+    m.toastTimer.control = "start"
+end sub
+
+sub hideToast()
+    m.toast.visible = false
+    m.toastIcon.visible = false
+    m.toastAccent.visible = false
+    m.toastBg.visible = false
+end sub

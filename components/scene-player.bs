@@ -1,0 +1,355 @@
+' ---------------------------------------------------------------------------
+' Parte da cena principal: Player.
+' O ficheiro MainScene.bs guarda o ciclo de vida e o estado; este corre no
+' mesmo ambito de componente (as scripts do MainScene.xml partilham o escopo).
+' ---------------------------------------------------------------------------
+
+sub playChannel(channel as object, startIndex as integer)
+    if channel = invalid or type(channel.sources) <> "roArray" or channel.sources.Count() = 0 then
+        showToastType("Canal sem fonte reproduzivel.", "error")
+        return
+    end if
+
+    rememberRecentChannel(channel)
+    m.currentChannel = channel
+    m.currentSources = channel.sources
+    m.currentSourceIndex = 0
+    if startIndex >= 0 and startIndex < m.currentSources.Count() then m.currentSourceIndex = startIndex
+    m.currentIsLive = boolField(channel, "isLive", true)
+    m.switchingSource = false
+    m.allSourcesFailed = false
+    m.lastVideoError = ""
+
+    m.settingsGroup.visible = false
+    m.guideGroup.visible = false
+    m.aboutGroup.visible = false
+    m.settingsVisible = false
+    m.guideVisible = false
+    m.aboutVisible = false
+
+    m.homeGroup.visible = false
+    m.video.mute = false
+    m.playerAutoHideTimer.control = "stop"
+    m.playerOverlay.visible = true
+    m.playerSpinner.control = "start"
+    m.playerSpinner.visible = true
+    m.playerCenterState.visible = false
+    m.video.visible = true
+    m.playerVisible = true
+    m.playerTitle.text = channel.title
+    m.playerSubtitle.text = channel.group
+    m.playerState.text = "Preparando player..."
+    m.playerState.color = "0xA79FBAFF"
+    m.playerTime.text = ""
+    m.playerLive.visible = m.currentIsLive
+    m.progressTrack.visible = not m.currentIsLive
+    m.progressFill.visible = not m.currentIsLive
+    m.progressFill.width = 0
+    if m.playerHint <> invalid then
+        if m.currentIsLive then
+            m.playerHint.text = "AO VIVO  •  OK mostra informações  •  pausa e busca indisponíveis  •  Back sai"
+        else
+            m.playerHint.text = "OK pausa  •  ‹ -10s  •  › +30s  •  Back sai"
+        end if
+    end if
+    m.video.control = "stop"
+    m.top.setFocus(true)
+    startSource(0)
+end sub
+
+sub startSource(index as integer)
+    if index < 0 or index >= m.currentSources.Count() then
+        allSourcesFailed()
+        return
+    end if
+    source = m.currentSources[index]
+    if source = invalid then
+        allSourcesFailed()
+        return
+    end if
+    url = strField(source, "url").Trim()
+    if url = "" then
+        nextSource()
+        return
+    end if
+
+    m.switchingSource = false
+    m.allSourcesFailed = false
+    m.currentSourceIndex = index
+    m.playerAutoHideTimer.control = "stop"
+    m.playerSpinner.control = "start"
+    m.playerSpinner.visible = true
+    m.playerCenterState.visible = false
+    m.playerOverlay.visible = true
+    m.playerState.color = "0xA79FBAFF"
+    m.playerState.text = "Carregando fonte " + Str(index + 1).Trim() + " de " + Str(m.currentSources.Count()).Trim() + "..."
+    label = sourceLabel(source, index)
+    m.playerSubtitle.text = m.currentChannel.group + "  •  " + label + "  (" + Str(index + 1).Trim() + "/" + Str(m.currentSources.Count()).Trim() + ")"
+
+    content = CreateObject("roSGNode", "ContentNode")
+    content.url = url
+    content.title = m.currentChannel.title
+    content.live = boolField(source, "isLive", m.currentIsLive)
+    content.playStart = 0
+    ' O app desenha a propria camada de pausa, tempo e barra de progresso.
+    ' A interface nativa do player apareceria por cima e brigaria com ela.
+    content.VideoDisableUI = true
+    if Left(LCase(url), 8) = "https://" then content.httpCertificatesFile = "common:/certs/ca-bundle.crt"
+    headers = buildVideoHeaders(source, m.userAgent)
+    if headers.Count() > 0 then content.httpHeaders = headers
+    fmt = strField(source, "streamFormat")
+    if fmt <> "" then content.streamFormat = fmt
+
+    m.video.control = "stop"
+    m.video.content = content
+    m.video.visible = true
+    m.video.control = "play"
+
+    m.failoverTimer.control = "stop"
+    if m.currentIsLive then
+        m.failoverTimer.duration = 20
+    else
+        m.failoverTimer.duration = 30
+    end if
+    m.failoverTimer.control = "start"
+end sub
+
+function sourceLabel(source as object, index as integer) as string
+    label = strField(source, "name")
+    quality = strField(source, "quality")
+    if label = "" and quality <> "" then label = quality
+    if label = "" then label = "Fonte " + Str(index + 1).Trim()
+    return label
+end function
+
+sub onVideoState()
+    if not m.playerVisible then return
+    state = LCase(m.video.state)
+    if state = "playing" then
+        m.failoverTimer.control = "stop"
+        m.playerSpinner.control = "stop"
+        m.playerSpinner.visible = false
+        m.playerCenterState.visible = false
+        showPlayerOverlay()
+        m.playerState.text = ""
+    else if state = "paused" then
+        m.playerAutoHideTimer.control = "stop"
+        m.playerSpinner.control = "stop"
+        m.playerSpinner.visible = false
+        m.playerCenterState.visible = true
+        m.playerOverlay.visible = true
+        m.playerState.color = "0xA79FBAFF"
+        m.playerState.text = "Pausado"
+    else if state = "buffering" or state = "loading" or state = "startup" then
+        m.playerAutoHideTimer.control = "stop"
+        m.playerSpinner.control = "start"
+        m.playerSpinner.visible = true
+        m.playerCenterState.visible = false
+        m.playerOverlay.visible = true
+        if m.playerState.text = "" then m.playerState.text = "Carregando..."
+    else if state = "error" then
+        m.failoverTimer.control = "stop"
+        m.playerSpinner.control = "stop"
+        m.playerSpinner.visible = false
+        errorText = strField(m.video, "errorMsg")
+        errorCode = strField(m.video, "errorCode")
+        if errorCode <> "" and errorText <> "" then
+            m.lastVideoError = "Codigo " + errorCode + ": " + errorText
+        else if errorText <> "" then
+            m.lastVideoError = errorText
+        else if errorCode <> "" then
+            m.lastVideoError = "Codigo " + errorCode
+        end if
+        if not m.switchingSource then nextSource()
+    else if state = "finished" then
+        m.failoverTimer.control = "stop"
+        m.playerAutoHideTimer.control = "stop"
+        m.playerSpinner.control = "stop"
+        m.playerSpinner.visible = false
+        if m.currentIsLive then
+            nextSource()
+        else
+            m.playerOverlay.visible = true
+            m.playerState.color = "0xA79FBAFF"
+            m.playerState.text = "Fim da reprodução. Back para sair."
+        end if
+    end if
+end sub
+
+sub showPlayerOverlay()
+    m.playerOverlay.visible = true
+    m.playerAutoHideTimer.control = "stop"
+    if LCase(m.video.state) = "playing" then m.playerAutoHideTimer.control = "start"
+end sub
+
+sub hidePlayerOverlay()
+    if not m.playerVisible or LCase(m.video.state) <> "playing" then return
+    m.playerOverlay.visible = false
+end sub
+
+sub onFailoverTimer()
+    nextSource()
+end sub
+
+sub nextSource()
+    if not m.playerVisible then return
+    if m.switchingSource then return
+    m.failoverTimer.control = "stop"
+    m.switchingSource = true
+    nextIndex = m.currentSourceIndex + 1
+    if nextIndex >= m.currentSources.Count() then
+        allSourcesFailed()
+        return
+    end if
+    m.currentSourceIndex = nextIndex
+    startSource(nextIndex)
+end sub
+
+sub allSourcesFailed()
+    m.switchingSource = false
+    m.allSourcesFailed = true
+    m.failoverTimer.control = "stop"
+    m.playerAutoHideTimer.control = "stop"
+    m.playerSpinner.control = "stop"
+    m.playerSpinner.visible = false
+    m.playerCenterState.visible = false
+    m.video.control = "stop"
+    m.playerOverlay.visible = true
+    m.playerState.color = "0xFFFF8A8AFF"
+    message = "Nenhuma fonte respondeu. Back para sair."
+    if m.lastVideoError <> "" then message = "Falha de reprodução: " + m.lastVideoError + ". Back para sair."
+    if Len(message) > 150 then message = Left(message, 147) + "..."
+    m.playerState.text = message
+end sub
+
+sub closePlayer()
+    m.playerVisible = false
+    m.allSourcesFailed = false
+    m.switchingSource = false
+    m.failoverTimer.control = "stop"
+    m.playerAutoHideTimer.control = "stop"
+    m.playerSpinner.control = "stop"
+    m.playerSpinner.visible = false
+    m.playerCenterState.visible = false
+    m.video.control = "stop"
+    m.video.visible = false
+    m.video.content = invalid
+    m.playerOverlay.visible = false
+    m.playerLive.visible = false
+    m.progressTrack.visible = false
+    m.progressFill.visible = false
+    m.homeGroup.visible = true
+    m.currentSources = []
+    m.currentChannel = invalid
+    focusListOrNav()
+end sub
+
+sub togglePlayback()
+    if not m.playerVisible then return
+    if m.allSourcesFailed then return
+    if m.currentIsLive then
+        m.playerAutoHideTimer.control = "stop"
+        m.playerOverlay.visible = true
+        m.playerState.color = "0xA79FBAFF"
+        m.playerState.text = "Transmissão ao vivo  •  pausa indisponível."
+        return
+    end if
+    state = LCase(m.video.state)
+    if state = "playing" then
+        m.video.control = "pause"
+        m.playerAutoHideTimer.control = "stop"
+        m.playerCenterState.visible = true
+        m.playerOverlay.visible = true
+        m.playerState.color = "0xA79FBAFF"
+        m.playerState.text = "Pausado"
+    else if state = "paused" then
+        m.video.control = "resume"
+        m.playerCenterState.visible = false
+        m.playerState.text = "Retomando..."
+    end if
+end sub
+
+sub seekBy(seconds as integer)
+    if not m.playerVisible then return
+    if m.currentIsLive then
+        m.playerAutoHideTimer.control = "stop"
+        m.playerOverlay.visible = true
+        m.playerState.color = "0xA79FBAFF"
+        m.playerState.text = "Ao vivo: busca indisponível."
+        return
+    end if
+    position = m.video.position
+    if position = invalid then position = 0
+    target = position + seconds
+    if target < 0 then target = 0
+    m.video.seek = target
+    showPlayerOverlay()
+    m.playerState.color = "0xA79FBAFF"
+    m.playerState.text = "Buscando..."
+end sub
+
+sub onProgressTimer()
+    updateChrome()
+    animateLoadProgress()
+    if not m.playerVisible then return
+    if m.currentIsLive then
+        m.progressFill.width = 0
+        m.playerTime.text = ""
+        return
+    end if
+    position = m.video.position
+    duration = m.video.duration
+    if position = invalid or duration = invalid then return
+    if duration <= 0 then
+        m.playerTime.text = ""
+        return
+    end if
+    percent = position / duration
+    if percent < 0 then percent = 0
+    if percent > 1 then percent = 1
+    m.progressFill.width = Int(1152 * percent)
+    m.playerTime.text = formatTime(position) + " / " + formatTime(duration)
+end sub
+
+function formatTime(seconds as integer) as string
+    total = Int(seconds)
+    if total < 0 then total = 0
+    hours = Int(total / 3600)
+    minutes = Int((total - hours * 3600) / 60)
+    secs = total - hours * 3600 - minutes * 60
+    if hours > 0 then return Str(hours).Trim() + ":" + pad2(minutes) + ":" + pad2(secs)
+    return pad2(minutes) + ":" + pad2(secs)
+end function
+
+function pad2(value as integer) as string
+    text = Str(value).Trim()
+    if Len(text) < 2 then text = "0" + text
+    return text
+end function
+
+sub playTest(kind as string)
+    url = ""
+    live = true
+    title = "Teste HLS público"
+    if kind = "mp4" then
+        url = "https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4"
+        live = false
+        title = "Teste MP4 público"
+    else
+        url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+    end if
+    source = makeSource(url, "", "", "Teste", "público", live)
+    channel = {
+        title: title
+        logo: ""
+        group: "Diagnóstico"
+        tvgId: ""
+        sources: [source]
+        isLive: live
+    }
+    playChannel(channel, 0)
+end sub
+
+' ---------------------------------------------------------------------------
+' Teclado / foco
+' ---------------------------------------------------------------------------
