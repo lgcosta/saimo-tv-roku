@@ -6,6 +6,22 @@ o versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
 
 ## [Não publicado]
 
+## [2.5.43] — 2026-11-13
+
+### Adicionado
+- **Preview do canal em foco**: ao abrir a app, o primeiro canal da grelhe
+  começa a reproduzir numa janela no canto inferior direito (332 × 187 px), com
+  o logótipo, o nome do canal e a fonte em uso. Cada canal novo focado troca a
+  preview; ao carregar em **OK** o canal abre em ecrã inteiro, no mesmo ponto
+  da reprodução. Só na grelhe de canais — as restantes telas não são afectadas.
+- A preview não tem som (`mute`) e a moldura e os rótulos desaparecem quando
+  o canal passa a ecrã inteiro.
+
+### Corrigido
+- O vídeo do player é um nó próprio da app, separado da preview: a Roku só
+  permite um `Video` a tocar de cada vez, por isso a preview é parada antes
+  de o player arrancar.
+
 ## [2.5.37] — 2026-11-12
 
 ### Corrigido
@@ -76,6 +92,7 @@ o versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
   (filmes, séries e episódios), favoritos, busca, guia de TV, ajustes e
   sincronização automática.
 
+[2.5.43]: https://github.com/lgcosta/saimo-tv-roku/releases/tag/v2.5.43
 [2.5.37]: https://github.com/lgcosta/saimo-tv-roku/releases/tag/v2.5.37
 [2.5.19]: https://github.com/lgcosta/saimo-tv-roku/releases/tag/v2.5.19
 [2.5.0]: https://github.com/lgcosta/saimo-tv-roku/releases/tag/v2.5.0

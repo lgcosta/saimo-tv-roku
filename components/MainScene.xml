@@ -21,8 +21,6 @@
         <Poster id="appBg" translation="[1, 1]" width="1280" height="720"
                 uri="pkg:/images/bg_app.png" loadSync="true" />
 
-        <Video id="video" visible="false" width="1280" height="720" />
-
         <Group id="homeGroup">
             <Poster id="sidebarBg" translation="[1, 1]" width="267" height="720"
                     uri="pkg:/images/bg_sidebar.png" loadSync="true" />
@@ -168,6 +166,26 @@
                        font="dictionary:fontBody" color="0xA8B4C0FF" wrap="true"
                        horizAlign="center" vertAlign="center" text="" visible="false" />
             </Group>
+        </Group>
+
+        <Group id="previewFrame" translation="[932, 396]" visible="false">
+            <Rectangle id="previewBg" width="340" height="212" color="0x0B0E14F2" />
+            <Rectangle id="previewEdge" translation="[0, 0]" width="340" height="2" color="0x4FE3D0FF" />
+        </Group>
+
+        <Video id="video" visible="false" width="1280" height="720" />
+
+        <Video id="previewVideo" translation="[936, 400]" width="332" height="187"
+               visible="false" />
+
+        <Group id="previewLabels" translation="[932, 396]" visible="false">
+            <Rectangle id="previewCaptionBg" translation="[0, 180]" width="340" height="32"
+                       color="0x0B0E14F2" />
+            <Label id="previewTitle" translation="[10, 186]" width="230" height="22"
+                   font="dictionary:fontMeta" color="0xF7F3FFFF" maxLines="1" text="" />
+            <Label id="previewState" translation="[244, 186]" width="86" height="22"
+                   font="dictionary:fontMeta" color="0x4FE3D0FF" horizAlign="right"
+                   maxLines="1" text="" />
         </Group>
 
         <Group id="settingsGroup" visible="false">

@@ -16,6 +16,15 @@ sub init()
     m.itemList = m.top.findNode("itemList")
     m.vodGrid = m.top.findNode("vodGrid")
     m.channelGrid = m.top.findNode("channelGrid")
+    m.previewVideo = m.top.findNode("previewVideo")
+    m.previewFrame = m.top.findNode("previewFrame")
+    m.previewLabels = m.top.findNode("previewLabels")
+    m.previewTitle = m.top.findNode("previewTitle")
+    m.previewState = m.top.findNode("previewState")
+    m.previewChannel = invalid
+    m.previewSourceIndex = 0
+    m.previewActive = false
+    m.previewFailed = false
     m.loadProgress = m.top.findNode("loadProgress")
     m.loadBar = m.top.findNode("loadBar")
     m.loadText = m.top.findNode("loadText")
@@ -201,6 +210,7 @@ sub init()
 
     m.navList.observeField("itemSelected", "onNavSelected")
     m.channelGrid.observeField("itemSelected", "onChannelSelected")
+    m.channelGrid.observeField("itemFocused", "onChannelFocused")
     m.itemList.observeField("itemSelected", "onItemSelected")
     m.vodGrid.observeField("itemSelected", "onVodItemSelected")
     m.vodGrid.observeField("itemFocused", "onVodItemFocused")
@@ -1279,6 +1289,140 @@ sub renderEntries(resetPosition as boolean)
     m.emptyLabel.visible = empty
 end sub
 
+' ---------------------------------------------------------------------------
+' Preview do canal em foco
+'
+' O Roku so deixa um no Video a tocar de cada vez, por isso a preview usa o
+' mesmo no do player: enquanto o utilizador navega na grelhe, o video e
+' reduzido e posto no canto inferior direito. Ao carregar em OK o canal abre
+' em ecra inteiro, no mesmo ponto da reproducao.
+' ---------------------------------------------------------------------------
+
+' Onde fica o video na preview e onde fica o ecra inteiro. BrightScript nao
+' tem constantes, por isso sao funcoes.
+' A preview encolhe o grupo que contem o video, com scale. O no Video
+' preenche o grupo e nao aceita outro tamanho em execucao.
+function previewFullscreenX() as integer
+    return 0
+end function
+
+function previewFullscreenY() as integer
+    return 0
+end function
+
+function previewFullscreenScale() as float
+    return 1.0
+end function
+
+function previewSmallX() as integer
+    return 936
+end function
+
+function previewSmallY() as integer
+    return 400
+end function
+
+function previewSmallScale() as float
+    return 0.2594
+end function
+
+sub onChannelFocused()
+    index = m.channelGrid.itemFocused
+    if index < 0 or index >= m.orderedChannels.Count() then
+        stopPreview()
+        return
+    end if
+    channel = m.orderedChannels[index]
+    ' Nao reiniciar a preview se o canal ja e o mesmo (o foco repete).
+    if m.previewActive and m.previewChannel <> invalid and m.previewChannel.title = channel.title then return
+    startPreview(channel)
+end sub
+
+sub startPreview(channel as object)
+    if channel = invalid or type(channel.sources) <> "roArray" or channel.sources.Count() = 0 then
+        stopPreview()
+        return
+    end if
+    ' O player em ecra inteiro tem prioridade: se esta a tocar, nao se mexe.
+    if m.playerVisible then return
+
+    m.previewChannel = channel
+    m.previewSourceIndex = 0
+    m.previewFailed = false
+    m.previewActive = true
+    if m.previewFrame <> invalid then m.previewFrame.visible = true
+    if m.previewLabels <> invalid then m.previewLabels.visible = true
+    if m.previewTitle <> invalid then m.previewTitle.text = channel.title
+    if m.previewState <> invalid then m.previewState.text = "A ligar..."
+    startPreviewSource(0)
+end sub
+
+sub startPreviewSource(index as integer)
+    if not m.previewActive or m.previewChannel = invalid then return
+    sources = m.previewChannel.sources
+    if index < 0 or index >= sources.Count() then
+        m.previewFailed = true
+        if m.previewState <> invalid then m.previewState.text = "Sem fonte"
+        return
+    end if
+    source = sources[index]
+    url = strField(source, "url").Trim()
+    if url = "" then
+        startPreviewSource(index + 1)
+        return
+    end if
+    m.previewSourceIndex = index
+
+    content = CreateObject("roSGNode", "ContentNode")
+    content.url = url
+    content.title = m.previewChannel.title
+    content.live = true
+    content.playStart = 0
+    content.VideoDisableUI = true
+    if Left(LCase(url), 8) = "https://" then content.httpCertificatesFile = "common:/certs/ca-bundle.crt"
+    headers = buildVideoHeaders(source, m.userAgent)
+    if headers.Count() > 0 then content.httpHeaders = headers
+    fmt = strField(source, "streamFormat")
+    if fmt <> "" then content.streamFormat = fmt
+
+    ' A preview nao se ouve: o utilizador so quer ver o que esta a passar.
+    ' A preview nao se ouve. Se o aparelho nao suportar 'mute', fica o
+    ' silencio do volume do sistema.
+    m.previewVideo.mute = true
+    m.previewVideo.content = content
+    m.previewVideo.visible = true
+    m.previewVideo.control = "play"
+    if m.previewState <> invalid then
+        m.previewState.text = "Fonte " + Str(index + 1).Trim() + " de " + Str(sources.Count()).Trim()
+    end if
+end sub
+
+sub stopPreview()
+    m.previewActive = false
+    m.previewChannel = invalid
+    m.previewSourceIndex = 0
+    m.previewFailed = false
+    if m.previewVideo <> invalid then
+        m.previewVideo.control = "stop"
+        m.previewVideo.visible = false
+        m.previewVideo.content = invalid
+    end if
+    if m.previewFrame <> invalid then m.previewFrame.visible = false
+    if m.previewLabels <> invalid then m.previewLabels.visible = false
+end sub
+
+' Abrir o canal em ecra inteiro a partir da preview: o video passa a ocupar o
+' ecra todo e a reproducao arranca no ponto em que estava.
+sub openPreviewFullscreen()
+    if m.previewChannel = invalid then return
+    channel = m.previewChannel
+    startIndex = m.previewSourceIndex
+    ' O Roku so permite um Video a tocar: a preview e parada antes de o
+    ' player arrancar, para nao haver conflito de media player.
+    stopPreview()
+    playChannel(channel, startIndex)
+end sub
+
 sub onChannelSelected()
     index = m.channelGrid.itemSelected
     if index < 0 then return
@@ -1288,8 +1432,15 @@ sub onChannelSelected()
     channelIndex = Val(strField(node, "channelIndex"))
     if channelIndex < 0 or channelIndex >= m.orderedChannels.Count() then return
     visible = m.orderedChannels[channelIndex]
+    ' Se a preview ja esta a mostrar este canal, aproveita a fonte que
+    ' resulta e abre em ecra inteiro sem voltar a descarregar.
+    if m.previewActive and m.previewChannel <> invalid and m.previewChannel.title = visible.title then
+        openPreviewFullscreen()
+        return
+    end if
+    stopPreview()
     m.status.text = "Abrindo " + visible.title + "..."
-    playChannel(visible)
+    playChannel(visible, 0)
 end sub
 
 sub onItemSelected()
@@ -1306,7 +1457,7 @@ sub onItemSelected()
         openSaimoEntry(entry.data, "search", index)
     else if entry.kind = "channel" then
         m.status.text = "Abrindo " + entry.data.title + "..."
-        playChannel(entry.data)
+        playChannel(entry.data, 0)
     else if entry.kind = "movie" or entry.kind = "vod" then
         data = entry.data
         itemType = LCase(strField(data, "type"))
@@ -2313,7 +2464,7 @@ sub playVodEntry(entry as object)
         sources: sources
         isLive: false
     }
-    playChannel(channel)
+    playChannel(channel, 0)
 end sub
 
 ' ---------------------------------------------------------------------------
@@ -3018,7 +3169,7 @@ sub onGuideSelected()
     if index < 0 or index >= m.guideChannels.Count() then return
     channel = m.guideChannels[index]
     closeGuide()
-    playChannel(channel)
+    playChannel(channel, 0)
 end sub
 
 sub loadEpg()
@@ -3070,9 +3221,9 @@ sub openAbout()
     m.aboutVisible = true
     m.aboutGroup.visible = true
     m.homeGroup.visible = false
-    text = "Saimo TV 2.5.37 - cliente pessoal não oficial para Roku." + Chr(10) + Chr(10)
+    text = "Saimo TV 2.5.44 - cliente pessoal não oficial para Roku." + Chr(10) + Chr(10)
     text = text + "Este aplicativo não é afiliado à Saimo. Ele lê listas M3U e o catálogo público que você configura. Use somente fontes de conteúdo que você tenha permissão para acessar e distribuir." + Chr(10) + Chr(10)
-    text = text + "Interface 2.5.37: capas do catálogo são associadas mesmo com variações de pontuação, acentos e ano." + Chr(10) + Chr(10)
+    text = text + "Interface 2.5.44: capas do catálogo são associadas mesmo com variações de pontuação, acentos e ano." + Chr(10) + Chr(10)
     text = text + "Canais de Portugal: a lista pública do M3UPT (https://m3upt.com/iptv) entra como categoria fixa, ao lado da lista que você configura. Traz TV, rádios e beachcams portugueses, com os cabeçalhos HTTP que cada emissor exige. Canais com DRM ClearKey e conteúdo sob demanda ficam de fora, porque o Roku não os reproduz." + Chr(10) + Chr(10)
     text = text + "O EPG do M3UPT (https://m3upt.com/epg) vem comprimido em gzip e o Roku não sabe descomprimir, por isso o guia fica vazio até você indicar um XMLTV em texto puro em Ajustes." + Chr(10) + Chr(10)
     text = text + "Recursos: canais por grupo, múltiplas fontes com failover, favoritos, busca com acentos, catálogo VOD em grade de pôsteres, filmes, séries e episódios, capas carregadas em segundo plano, cache por letra e sincronização automática (verificação a cada 15 minutos; download quando o cache passa de 6 horas)." + Chr(10) + Chr(10)
@@ -3094,7 +3245,7 @@ end sub
 ' Player
 ' ---------------------------------------------------------------------------
 
-sub playChannel(channel as object)
+sub playChannel(channel as object, startIndex as integer)
     if channel = invalid or type(channel.sources) <> "roArray" or channel.sources.Count() = 0 then
         showToastType("Canal sem fonte reproduzivel.", "error")
         return
@@ -3103,6 +3254,7 @@ sub playChannel(channel as object)
     m.currentChannel = channel
     m.currentSources = channel.sources
     m.currentSourceIndex = 0
+    if startIndex >= 0 and startIndex < m.currentSources.Count() then m.currentSourceIndex = startIndex
     m.currentIsLive = boolField(channel, "isLive", true)
     m.switchingSource = false
     m.allSourcesFailed = false
@@ -3116,6 +3268,12 @@ sub playChannel(channel as object)
     m.aboutVisible = false
 
     m.homeGroup.visible = false
+    ' A preview usava o video reduzido no canto; no player ele volta a
+    ' ocupar o ecra todo.
+    m.video.mute = false
+    ' Em ecra inteiro a moldura da preview desaparece.
+    if m.previewFrame <> invalid then m.previewFrame.visible = false
+    if m.previewLabels <> invalid then m.previewLabels.visible = false
     m.playerAutoHideTimer.control = "stop"
     m.playerOverlay.visible = true
     m.playerSpinner.control = "start"
@@ -3329,6 +3487,8 @@ sub closePlayer()
     m.currentSources = []
     m.currentChannel = invalid
     focusListOrNav()
+    ' De volta a grelhe: retoma a preview do canal em foco.
+    if m.activeView = "channels" then onChannelFocused()
 end sub
 
 sub togglePlayback()
@@ -3434,7 +3594,7 @@ sub playTest(kind as string)
         sources: [source]
         isLive: live
     }
-    playChannel(channel)
+    playChannel(channel, 0)
 end sub
 
 ' ---------------------------------------------------------------------------
