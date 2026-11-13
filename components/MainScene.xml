@@ -15,6 +15,8 @@
     <script type="text/brightscript" uri="pkg:/components/scene-guide.bs" />
     <script type="text/brightscript" uri="pkg:/components/scene-player.bs" />
     <script type="text/brightscript" uri="pkg:/components/scene-keys.bs" />
+    <script type="text/brightscript" uri="pkg:/components/scene-subs.bs" />
+    <script type="text/brightscript" uri="pkg:/source/subs.bs" />
 
     <children>
         <Group visible="false">
@@ -185,6 +187,17 @@
         </Group>
 
         <Video id="video" visible="false" width="1280" height="720" />
+
+        <!-- Legendas desenhadas pela app (ficheiro SRT/VTT). Ficam por cima
+             do vídeo e por baixo do cromado do player. O grupo é ancorado pela
+             base: translation.y = posição - altura do texto. -->
+        <Group id="subsGroup" visible="false" translation="[120, 560]">
+            <Rectangle id="subsBg" translation="[0, 0]" width="1040" height="46"
+                       color="0x000000B3" />
+            <Label id="subsText" translation="[0, 0]" width="1040" height="46"
+                   font="dictionary:fontBody" color="0xFFFFFFFF" wrap="true"
+                   horizAlign="center" vertAlign="bottom" text="" />
+        </Group>
 
         <Group id="settingsGroup" visible="false">
             <Rectangle translation="[64, 35]" width="1152" height="649" color="0x0D0A15F2" />

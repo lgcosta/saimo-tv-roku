@@ -1,6 +1,12 @@
 ' Funcoes compartilhadas entre a cena principal e as tarefas.
 ' Nada aqui depende de estado da interface.
 
+' "Sim"/"Não" para as listas de ajustes.
+function yesNoText(flag as boolean) as string
+    if flag then return "Sim"
+    return "Não"
+end function
+
 function isStringValue(value as dynamic) as boolean
     if value = invalid then return false
     valueType = type(value)

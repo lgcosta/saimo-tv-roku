@@ -6,6 +6,36 @@ o versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
 
 ## [Não publicado]
 
+## [2.8.0] — 2026-11-13
+
+### Adicionado
+- **Legendas de ficheiro com estilo próprio.** A Roku desenha as legendas
+  embutidas no stream com o estilo do sistema e não deixa a app mudá-lo — a
+  documentação é explícita: «a renderização usa sempre a fonte Gotham
+  integrada». Para se poder escolher o aspecto, a app passou a ler ficheiros
+  **SRT e WebVTT** e a desenhar ela própria as cue sobre o vídeo, com:
+  - **tipo de letra** (Roboto Regular, Medium, Bold ou Black);
+  - **tamanho** (Pequeno 26, Médio 32, Grande 40);
+  - **cor** (branco, amarelo, ciano ou verde);
+  - **posição** (baixo, médio ou alto, ancorada pela base);
+  - **fundo** escuro ligado ou desligado.
+  O ficheiro configura-se em *Ajustes → Legendas: ficheiro SRT/VTT*, aceita
+  `http(s)://` ou um caminho `pkg:/`, e é descarregado e interpretado numa
+  tarefa de fundo. A sincronização segue a posição do `Video` (a 4 notificações
+  por segundo enquanto há legendas). O liga/desliga fica em Ajustes: a
+  plataforma trata a tecla **\*** enquanto há vídeo a tocar e nunca a entrega à
+  app, pelo que não há atalho durante a reprodução.
+- **Legendas embutidas do stream** também passaram a ser controláveis em
+  *Ajustes*: desligadas, ligadas ou em repetição, via `globalCaptionMode`. O
+  aspecto destas continua a ser o do sistema (Definições → Acessibilidade).
+- *Ajustes → Legendas: experimentar com a demonstração* alterna entre os dois
+  formatos incluídos no pacote (`.srt` e `.vtt`) e desligar, para se ver o
+  estilo a funcionar sem precisar de um ficheiro próprio.
+
+### Alterado
+- O `Video` passou a notificar a posição a cada 250 ms quando há legendas de
+  ficheiro activas (0,5 s por omissão), e volta ao intervalo normal ao sair.
+
 ## [2.7.0] — 2026-11-13
 
 ### Removido

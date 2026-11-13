@@ -15,6 +15,10 @@ portuguesa do [M3UPT](https://github.com/LITUATUI/M3UPT) como categoria fixa.
   na grelha como mais um grupo, ao lado da tua e dos Canais de Portugal.
 - **Favoritos e recentes** — a tecla de informação marca o canal em foco e os
   últimos sintonizados ficam numa categoria própria.
+- **Legendas com estilo** — ficheiros SRT/WebVTT desenhados pela app, com tipo
+  de letra, tamanho, cor, posição e fundo à escolha. As legendas embutidas no
+  stream usam o estilo do sistema, que a app só liga, desliga ou põe em
+  repetição.
 - **Favoritos, Busca, Guia de TV e Ajustes** — lista M3U configurável, EPG
   XMLTV, agente HTTP e diagnóstico.
 - **Canais de Portugal** — 432 canais do M3UPT, ao lado da sua lista.
@@ -79,6 +83,7 @@ bsconfig.json       configuração do BrighterScript (staging em build/)
 source/
   main.bs            ponto de entrada
   core.bs            biblioteca: parsers, HTTP, catálogo Saimo, M3UPT
+  subs.bs            parser de SRT e WebVTT
   theme.bs           paleta e cores
 components/
   MainScene.bs       ciclo de vida e estado da cena
@@ -92,6 +97,8 @@ components/
   scene-guide.bs     guia/EPG e sobre
   scene-player.bs    player e failover de fontes
   scene-keys.bs      teclado e foco
+  scene-subs.bs      legendas de ficheiro e estilo
+testes/              demonstração de legendas (SRT e VTT)
   ChannelCard.*      cartão de canal (logo, nome, programa)
   VodCard.*          cartão de filme/série
   EpisodeCard.*      cartão de episódio

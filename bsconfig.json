@@ -5,7 +5,8 @@
         "source/**/*",
         "components/**/*",
         "images/**/*",
-        "fonts/**/*"
+        "fonts/**/*",
+        "testes/**/*"
     ],
     "stagingDir": "./build",
     "retainStagingDir": true,

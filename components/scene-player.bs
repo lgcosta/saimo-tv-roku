@@ -13,6 +13,7 @@ sub playChannel(channel as object, startIndex as integer)
     rememberRecentChannel(channel)
     m.currentChannel = channel
     m.currentSources = channel.sources
+    if m.subsEnabled and m.subsUrl <> "" then loadSubtitles()
     m.currentSourceIndex = 0
     if startIndex >= 0 and startIndex < m.currentSources.Count() then m.currentSourceIndex = startIndex
     m.currentIsLive = boolField(channel, "isLive", true)
@@ -99,6 +100,14 @@ sub startSource(index as integer)
     if headers.Count() > 0 then content.httpHeaders = headers
     fmt = strField(source, "streamFormat")
     if fmt <> "" then content.streamFormat = fmt
+
+    ' Legendas de ficheiro: 4 notificações por segundo chegam para acertar a
+    ' cue; sem legendas fica o intervalo por omissão (0,5 s).
+    if m.subsEnabled and m.subsUrl <> "" then
+        m.video.notificationInterval = 0.25
+    else
+        m.video.notificationInterval = 0.5
+    end if
 
     m.video.control = "stop"
     m.video.content = content
@@ -241,6 +250,8 @@ sub closePlayer()
     m.homeGroup.visible = true
     m.currentSources = []
     m.currentChannel = invalid
+    stopSubtitles()
+    m.video.notificationInterval = 0.5
     focusListOrNav()
 end sub
 

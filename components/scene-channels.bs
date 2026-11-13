@@ -146,6 +146,8 @@ sub onFetchState()
         handlePortugalResult(task)
     else if kind = "extra_playlist" then
         handleExtraPlaylistResult(task)
+    else if kind = "subtitles" then
+        handleSubtitleResult(task)
     else if kind = "vod_catalog" then
         handleVodCatalogResult(task)
     else if kind = "saimo_index" then

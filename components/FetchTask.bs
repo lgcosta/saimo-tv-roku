@@ -10,6 +10,8 @@ sub runTask()
         loadM3upt()
     else if mode = "extra_playlist" then
         loadExtraPlaylist()
+    else if mode = "subtitles" then
+        loadSubtitles()
     else if mode = "vod_catalog" then
         loadVodCatalog()
     else if mode = "saimo_index" then
@@ -55,6 +57,45 @@ sub loadPlaylist()
 
     m.top.resultJson = FormatJson(channels)
     m.top.count = channels.Count()
+    m.top.success = true
+end sub
+
+' Ficheiro de legendas (SRT ou WebVTT) desenhado pela app.
+sub loadSubtitles()
+    url = m.top.url.Trim()
+    if Left(LCase(url), 5) = "pkg:/" then
+        ' Ficheiro que vem dentro do pacote: nao ha nada para descarregar.
+        body = ReadAsciiFile(url)
+        if not isStringValue(body) or body = "" then
+            m.top.error = "Nao foi possivel ler o ficheiro de legendas do pacote."
+            return
+        end if
+        entries = parseSubtitleText(body)
+        if entries.Count() = 0 then
+            m.top.error = "O ficheiro de legendas do pacote nao tem legendas validas."
+            return
+        end if
+        m.top.resultJson = FormatJson(entries)
+        m.top.count = entries.Count()
+        m.top.success = true
+        return
+    end if
+    response = httpGet(url, m.top.userAgent, "")
+    if not response.ok then
+        m.top.error = "Nao foi possivel descarregar as legendas: " + response.error
+        return
+    end if
+    if looksLikeHtml(response.body) then
+        m.top.error = "O endereco das legendas retornou uma pagina HTML."
+        return
+    end if
+    entries = parseSubtitleText(response.body)
+    if entries.Count() = 0 then
+        m.top.error = "O ficheiro foi descarregado mas nenhuma legenda foi reconhecida."
+        return
+    end if
+    m.top.resultJson = FormatJson(entries)
+    m.top.count = entries.Count()
     m.top.success = true
 end sub
 

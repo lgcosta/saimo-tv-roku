@@ -1,0 +1,18 @@
+1
+00:00:00,500 --> 00:00:04,000
+Legendas desenhadas pela app.
+
+2
+00:00:04,200 --> 00:00:08,000
+Podes escolher tipo de letra, tamanho,
+<i>cor</i> e posição em Ajustes.
+
+3
+00:00:08,200 --> 00:00:12,000
+A tecla * liga e desliga
+durante a reprodução.
+
+4
+00:00:12,200 --> 00:00:15,500
+As legendas embutidas no stream
+continuam a ser desenhadas pela Roku.

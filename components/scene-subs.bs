@@ -1,0 +1,260 @@
+' ---------------------------------------------------------------------------
+' Legendas desenhadas pela app
+'
+' A Roku desenha as legendas embutidas no stream com o estilo do sistema —
+' sempre a fonte Gotham, com o tamanho e a cor que o utilizador escolheu em
+' Definições → Acessibilidade → Legendas. A app não pode mudar isso.
+'
+' Estas são outras: vêm de um ficheiro SRT/VTT, são desenhadas por nós e por
+' isso aceitam tipo de letra, tamanho, cor, posição e fundo. O ficheiro é
+' descarregado numa tarefa de fundo; o sincronismo segue a posição do Video.
+' ---------------------------------------------------------------------------
+
+function subtitleSizes() as object
+    return [26, 32, 40]
+end function
+
+function subtitleSizeNames() as object
+    return ["Pequeno", "Médio", "Grande"]
+end function
+
+function subtitleFonts() as object
+    return [
+        { name: "Roboto", uri: "pkg:/fonts/Roboto-Regular.ttf" }
+        { name: "Roboto Medium", uri: "pkg:/fonts/Roboto-Medium.ttf" }
+        { name: "Roboto Bold", uri: "pkg:/fonts/Roboto-Bold.ttf" }
+        { name: "Roboto Black", uri: "pkg:/fonts/Roboto-Black.ttf" }
+    ]
+end function
+
+function subtitleColors() as object
+    return [
+        { name: "Branco", value: "0xFFFFFFFF" }
+        { name: "Amarelo", value: "0xFFFFE066" }
+        { name: "Ciano", value: "0xFF8BE9FD" }
+        { name: "Verde", value: "0xFF9BF6A0" }
+    ]
+end function
+
+' Ancoradas pela base: o texto cresce para cima à medida que ganha linhas.
+function subtitlePositions() as object
+    return [
+        { name: "Baixo", y: 610 }
+        { name: "Médio", y: 520 }
+        { name: "Alto", y: 430 }
+    ]
+end function
+
+function captionModes() as object
+    return [
+        { name: "Desligadas", value: "Off" }
+        { name: "Ligadas", value: "On" }
+        { name: "Em repetição", value: "On instant replay" }
+    ]
+end function
+
+function subtitleSizeName() as string
+    names = subtitleSizeNames()
+    index = m.subsSizeIndex
+    if index < 0 or index >= names.Count() then index = 1
+    return names[index]
+end function
+
+function subtitleFontName() as string
+    fonts = subtitleFonts()
+    index = m.subsFontIndex
+    if index < 0 or index >= fonts.Count() then index = 1
+    return fonts[index].name
+end function
+
+function subtitleColorName() as string
+    colors = subtitleColors()
+    index = m.subsColorIndex
+    if index < 0 or index >= colors.Count() then index = 0
+    return colors[index].name
+end function
+
+function subtitlePositionName() as string
+    positions = subtitlePositions()
+    index = m.subsPosIndex
+    if index < 0 or index >= positions.Count() then index = 0
+    return positions[index].name
+end function
+
+function captionModeName() as string
+    modes = captionModes()
+    index = m.captionModeIndex
+    if index < 0 or index >= modes.Count() then index = 0
+    return modes[index].name
+end function
+
+function subtitleFontSize() as integer
+    sizes = subtitleSizes()
+    index = m.subsSizeIndex
+    if index < 0 or index >= sizes.Count() then index = 1
+    return sizes[index]
+end function
+
+function subtitleAnchorY() as integer
+    positions = subtitlePositions()
+    index = m.subsPosIndex
+    if index < 0 or index >= positions.Count() then index = 0
+    return positions[index].y
+end function
+
+sub initSubtitleState()
+    m.subsEnabled = readSetting("subsEnabled") = "1"
+    m.subsUrl = readSetting("subsUrl")
+    m.subsSizeIndex = Val(readSetting("subsSize"))
+    m.subsFontIndex = Val(readSetting("subsFont"))
+    m.subsColorIndex = Val(readSetting("subsColor"))
+    m.subsPosIndex = Val(readSetting("subsPos"))
+    m.subsBgEnabled = readSetting("subsBg") = "1"
+    m.captionModeIndex = Val(readSetting("captionMode"))
+    m.subsEntries = []
+    m.subsIndex = 0
+    m.subsLastText = ""
+    m.subsLoading = false
+end sub
+
+' Reconstrói a fonte a partir das escolhas. A fonte é criada em execução para
+' não precisar de um nó por combinação de família e tamanho.
+sub applySubtitleStyle()
+    if m.subsText = invalid then return
+    fonts = subtitleFonts()
+    fontIndex = m.subsFontIndex
+    if fontIndex < 0 or fontIndex >= fonts.Count() then fontIndex = 1
+    colors = subtitleColors()
+    colorIndex = m.subsColorIndex
+    if colorIndex < 0 or colorIndex >= colors.Count() then colorIndex = 0
+    font = CreateObject("roSGNode", "Font")
+    font.uri = fonts[fontIndex].uri
+    font.size = subtitleFontSize()
+    m.subsText.font = font
+    m.subsText.color = colors[colorIndex].value
+    if m.subsBg <> invalid then m.subsBg.visible = m.subsBgEnabled
+    print "SAIMO_SUBS estilo fonte=" + fonts[fontIndex].name + " tamanho=" + Str(subtitleFontSize()).Trim() + " cor=" + colors[colorIndex].name + " posicao=" + subtitlePositionName() + " fundo=" + yesNoText(m.subsBgEnabled)
+    ' força a próxima cue a ser redesenhada com o estilo novo
+    m.subsLastText = ""
+end sub
+
+sub applyCaptionMode()
+    if m.video = invalid then return
+    modes = captionModes()
+    index = m.captionModeIndex
+    if index < 0 or index >= modes.Count() then index = 0
+    m.video.globalCaptionMode = modes[index].value
+end sub
+
+sub hideSubtitleLine()
+    m.subsLastText = ""
+    if m.subsGroup <> invalid then m.subsGroup.visible = false
+end sub
+
+' Pinta a cue actual. Só toca na cena quando o texto muda de facto.
+sub showSubtitleLine(text as string)
+    if m.subsText = invalid or m.subsGroup = invalid then return
+    if text = m.subsLastText then return
+    m.subsLastText = text
+    if text = "" then
+        m.subsGroup.visible = false
+        return
+    end if
+    lines = text.Split(Chr(10)).Count()
+    height = lines * (subtitleFontSize() + 6) + 10
+    m.subsText.height = height
+    m.subsText.text = text
+    if m.subsBg <> invalid then
+        m.subsBg.height = height
+        m.subsBg.visible = m.subsBgEnabled
+    end if
+    m.subsGroup.translation = [120, subtitleAnchorY() - height]
+    m.subsGroup.visible = true
+    print "SAIMO_SUBS linha=[" + Left(text, 40) + "] y=" + Str(subtitleAnchorY() - height).Trim() + " h=" + Str(height).Trim()
+end sub
+
+' Notificação de `position` do Video (o intervalo segue notificationInterval).
+sub onVideoPosition()
+    if not m.playerVisible then return
+    if not m.subsEnabled or m.subsEntries.Count() = 0 then return
+    position = m.video.position
+    if position = invalid or position <= 0 then return
+    found = subtitleTextAt(m.subsEntries, position, m.subsIndex)
+    m.subsIndex = found.index
+    showSubtitleLine(found.text)
+end sub
+
+sub loadSubtitles()
+    if m.subsUrl = "" then return
+    if m.subsLoading then return
+    m.subsEntries = []
+    m.subsIndex = 0
+    hideSubtitleLine()
+    m.subsLoading = true
+    if not startFetch("subtitles", m.subsUrl, "", "", "", "") then
+        m.subsLoading = false
+        print "SAIMO_SUBS adiada (outra tarefa em curso)"
+        return
+    end if
+    showToast("Carregando legendas...")
+end sub
+
+sub handleSubtitleResult(task as object)
+    m.subsLoading = false
+    if task.success <> true then
+        message = strField(task, "error")
+        if message = "" then message = "Não foi possível carregar as legendas."
+        print "SAIMO_SUBS erro " + message
+        showToastType(message, "error")
+        return
+    end if
+    parsed = ParseJson(task.resultJson)
+    if type(parsed) <> "roArray" then
+        print "SAIMO_SUBS erro lista invalida"
+        return
+    end if
+    m.subsEntries = parsed
+    m.subsIndex = 0
+    m.subsLastText = ""
+    print "SAIMO_SUBS carregadas=" + Str(parsed.Count()).Trim() + " formato=" + subtitleFormatFromUrl(m.subsUrl)
+    showToastType(Str(parsed.Count()).Trim() + " legendas carregadas.", "success")
+end sub
+
+sub stopSubtitles()
+    m.subsEntries = []
+    m.subsIndex = 0
+    hideSubtitleLine()
+end sub
+
+' Liga/desliga as legendas do ficheiro. Não há atalho durante a reprodução:
+' a plataforma trata a tecla * enquanto há vídeo a tocar e nunca a entrega ao
+' onKeyEvent (confirmado na TV), por isso o controlo fica em Ajustes.
+sub toggleSubtitles()
+    m.subsEnabled = not m.subsEnabled
+    writeSetting("subsEnabled", "0")
+    if m.subsEnabled then writeSetting("subsEnabled", "1")
+    if not m.subsEnabled then
+        stopSubtitles()
+        showToastType("Legendas do ficheiro desligadas.", "success")
+        return
+    end if
+    if m.subsUrl = "" then
+        showToastType("Ligadas, mas falta o ficheiro SRT/VTT em Ajustes.", "error")
+        return
+    end if
+    showToastType("Legendas do ficheiro ligadas.", "success")
+    if m.playerVisible then loadSubtitles()
+end sub
+
+' Sobe/desce a posição e o tamanho em execução, sem sair do player.
+sub cycleSubtitleStyle(delta as integer)
+    if m.subsPosIndex + delta < 0 or m.subsPosIndex + delta >= subtitlePositions().Count() then return
+    m.subsPosIndex = m.subsPosIndex + delta
+    writeSetting("subsPos", Str(m.subsPosIndex).Trim())
+    applySubtitleStyle()
+    if m.subsLastText = "" and m.subsEntries.Count() > 0 then
+        ' redesenha a cue actual com a posição nova
+        if m.playerVisible then onVideoPosition()
+    end if
+    showToast("Legendas: " + subtitlePositionName())
+end sub

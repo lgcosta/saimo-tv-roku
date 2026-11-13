@@ -16,5 +16,6 @@
         <field id="error" type="string" />
     </interface>
     <script type="text/brightscript" uri="pkg:/source/core.bs" />
+    <script type="text/brightscript" uri="pkg:/source/subs.bs" />
     <script type="text/brightscript" uri="pkg:/components/FetchTask.bs" />
 </component>

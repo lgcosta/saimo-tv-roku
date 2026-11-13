@@ -44,6 +44,15 @@ sub buildSettings()
     entries.Push({ title: "URL do EPG XMLTV (opcional)", key: "epg", help: "Endereço do guia XMLTV. Pode ficar vazio." })
     entries.Push({ title: "User-Agent HTTP", key: "ua", help: "Agente enviado nas requisições de listas e ao player." })
     entries.Push({ title: "Usar catálogo público Saimo (canais)", key: "preset", help: "Define a lista pública de canais como fonte. Ação explícita; nada é carregado sozinho." })
+    entries.Push({ title: "Legendas: ficheiro SRT/VTT", key: "subsUrl", help: "Endereço de um ficheiro de legendas (.srt ou .vtt) para o vídeo. A app desenha estas legendas ela própria, o que permite escolher tipo de letra, tamanho, cor e posição. As legendas embutidas no stream não são afectadas." })
+    entries.Push({ title: "Legendas: experimentar com a demonstração", key: "subsDemo", help: "Aponta as legendas do ficheiro para a demonstração que vem no pacote e liga-as. Depois use Ajustes → Testar player com MP4 público para ver o resultado com o estilo escolhido." })
+    entries.Push({ title: "Legendas: mostrar", key: "subsToggle", help: "Liga ou desliga as legendas do ficheiro." })
+    entries.Push({ title: "Legendas: tamanho", key: "subsSize", help: "Tamanho do texto das legendas do ficheiro." })
+    entries.Push({ title: "Legendas: tipo de letra", key: "subsFont", help: "Família do texto das legendas do ficheiro." })
+    entries.Push({ title: "Legendas: cor", key: "subsColor", help: "Cor do texto das legendas do ficheiro." })
+    entries.Push({ title: "Legendas: posição", key: "subsPos", help: "Altura das legendas do ficheiro no ecrã." })
+    entries.Push({ title: "Legendas: fundo", key: "subsBg", help: "Faixa escura por trás do texto, para ler sobre imagens claras." })
+    entries.Push({ title: "Legendas embutidas do stream", key: "captionMode", help: "Legendas que vêm dentro do próprio vídeo (EIA-608/708, WebVTT do manifesto). São desenhadas pela Roku com o estilo do sistema: o tipo de letra, o tamanho e a cor definem-se em Definições → Acessibilidade → Legendas. Aqui só se liga, desliga ou fica em repetição." })
     entries.Push({ title: "Recarregar lista de canais", key: "refresh", help: "Baixa a lista de canais configurada novamente." })
     entries.Push({ title: "Limpar cache local", key: "cache", help: "Apaga cache de canais, filmes, séries e EPG. Não apaga favoritos nem ajustes." })
     entries.Push({ title: "Testar player com HLS público", key: "hls", help: "Abre um stream HLS de teste para confirmar o player." })
@@ -93,6 +102,23 @@ function settingsHelpText(entry as object) as string
         end if
     else if entry.key = "epg" then
         text = text + Chr(10) + Chr(10) + "Atual: " + valueOrEmpty(m.epgUrl)
+    else if entry.key = "subsUrl" then
+        text = text + Chr(10) + Chr(10) + "Atual: " + valueOrEmpty(m.subsUrl)
+        text = text + Chr(10) + "Legendas carregadas: " + Str(m.subsEntries.Count()).Trim()
+    else if entry.key = "subsToggle" then
+        text = text + Chr(10) + Chr(10) + "Estado: " + yesNoText(m.subsEnabled)
+    else if entry.key = "subsSize" then
+        text = text + Chr(10) + Chr(10) + "Atual: " + subtitleSizeName() + " (" + Str(subtitleFontSize()).Trim() + " px)"
+    else if entry.key = "subsFont" then
+        text = text + Chr(10) + Chr(10) + "Atual: " + subtitleFontName()
+    else if entry.key = "subsColor" then
+        text = text + Chr(10) + Chr(10) + "Atual: " + subtitleColorName()
+    else if entry.key = "subsPos" then
+        text = text + Chr(10) + Chr(10) + "Atual: " + subtitlePositionName() + " (base em y=" + Str(subtitleAnchorY()).Trim() + ")"
+    else if entry.key = "subsBg" then
+        text = text + Chr(10) + Chr(10) + "Atual: " + yesNoText(m.subsBgEnabled)
+    else if entry.key = "captionMode" then
+        text = text + Chr(10) + Chr(10) + "Atual: " + captionModeName()
     else if entry.key = "ua" then
         text = text + Chr(10) + Chr(10) + "Atual: " + valueOrEmpty(m.userAgent)
     else if entry.key = "vod" then
@@ -143,6 +169,77 @@ sub onSettingsSelected()
     else if key = "vodrefresh" then
         closeSettings()
         refreshVodCatalog(true)
+    else if key = "subsUrl" then
+        editSetting("subsUrl", "URL do ficheiro de legendas (.srt ou .vtt)", m.subsUrl)
+    else if key = "subsDemo" then
+        ' Ciclo: SRT -> WebVTT -> desligado. Serve para experimentar o estilo
+        ' com os dois formatos e volta a deixar a app sem ficheiro.
+        demoSrt = "pkg:/testes/legendas-demo.srt"
+        demoVtt = "pkg:/testes/legendas-demo.vtt"
+        if m.subsUrl = demoSrt then
+            m.subsUrl = demoVtt
+            showToastType("Demonstração em WebVTT.", "success")
+        else if m.subsUrl = demoVtt then
+            m.subsUrl = ""
+            showToastType("Legendas do ficheiro desligadas.", "success")
+        else
+            m.subsUrl = demoSrt
+            showToastType("Demonstração em SRT.", "success")
+        end if
+        m.subsEnabled = m.subsUrl <> ""
+        writeSetting("subsUrl", m.subsUrl)
+        writeSetting("subsEnabled", "0")
+        if m.subsEnabled then writeSetting("subsEnabled", "1")
+        if not m.subsEnabled then stopSubtitles()
+        buildSettings()
+        m.settingsList.setFocus(true)
+    else if key = "subsToggle" then
+        toggleSubtitles()
+        buildSettings()
+        m.settingsList.setFocus(true)
+    else if key = "subsSize" then
+        m.subsSizeIndex = (m.subsSizeIndex + 1) mod subtitleSizes().Count()
+        writeSetting("subsSize", Str(m.subsSizeIndex).Trim())
+        applySubtitleStyle()
+        showToastType("Tamanho das legendas: " + subtitleSizeName(), "success")
+        buildSettings()
+        m.settingsList.setFocus(true)
+    else if key = "subsFont" then
+        m.subsFontIndex = (m.subsFontIndex + 1) mod subtitleFonts().Count()
+        writeSetting("subsFont", Str(m.subsFontIndex).Trim())
+        applySubtitleStyle()
+        showToastType("Tipo de letra: " + subtitleFontName(), "success")
+        buildSettings()
+        m.settingsList.setFocus(true)
+    else if key = "subsColor" then
+        m.subsColorIndex = (m.subsColorIndex + 1) mod subtitleColors().Count()
+        writeSetting("subsColor", Str(m.subsColorIndex).Trim())
+        applySubtitleStyle()
+        showToastType("Cor das legendas: " + subtitleColorName(), "success")
+        buildSettings()
+        m.settingsList.setFocus(true)
+    else if key = "subsPos" then
+        m.subsPosIndex = (m.subsPosIndex + 1) mod subtitlePositions().Count()
+        writeSetting("subsPos", Str(m.subsPosIndex).Trim())
+        applySubtitleStyle()
+        showToastType("Posição das legendas: " + subtitlePositionName(), "success")
+        buildSettings()
+        m.settingsList.setFocus(true)
+    else if key = "subsBg" then
+        m.subsBgEnabled = not m.subsBgEnabled
+        writeSetting("subsBg", "0")
+        if m.subsBgEnabled then writeSetting("subsBg", "1")
+        applySubtitleStyle()
+        showToastType("Fundo das legendas: " + yesNoText(m.subsBgEnabled), "success")
+        buildSettings()
+        m.settingsList.setFocus(true)
+    else if key = "captionMode" then
+        m.captionModeIndex = (m.captionModeIndex + 1) mod captionModes().Count()
+        writeSetting("captionMode", Str(m.captionModeIndex).Trim())
+        applyCaptionMode()
+        showToastType("Legendas embutidas: " + captionModeName(), "success")
+        buildSettings()
+        m.settingsList.setFocus(true)
     else if key = "epg" then
         editSetting("epg", "URL do EPG XMLTV", m.epgUrl)
     else if key = "ua" then
@@ -278,6 +375,19 @@ sub onEditSettingButton()
             buildSettings()
             m.settingsList.setFocus(true)
         end if
+    else if key = "subsUrl" then
+        m.subsUrl = value.Trim()
+        writeSetting("subsUrl", m.subsUrl)
+        print "SAIMO_SUBS url=[" + m.subsUrl + "]"
+        if m.subsUrl = "" then
+            stopSubtitles()
+            showToastType("Legendas do ficheiro removidas.", "success")
+        else if m.playerVisible and m.subsEnabled then
+            loadSubtitles()
+        else
+            showToastType("Ficheiro de legendas guardado.", "success")
+        end if
+        if m.settingsVisible then m.settingsList.setFocus(true)
     else if key = "epg" then
         m.epgUrl = value.Trim()
         writeSetting("epgUrl", m.epgUrl)

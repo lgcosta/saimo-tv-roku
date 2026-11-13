@@ -1,0 +1,137 @@
+' Legendas de ficheiro (SRT e WebVTT).
+'
+' A Roku desenha as legendas embutidas no stream com o estilo do sistema —
+' sempre a fonte Gotham, com o tamanho e a cor que o utilizador escolheu em
+' Acessibilidade. Para se poder escolher tipo de letra, tamanho, cor e
+' posição, a app lê um ficheiro de legendas e desenha as cue ela própria.
+'
+' Nada aqui depende da interface: são funções puras sobre texto.
+
+' Texto do ficheiro -> array de { start, stop, text } por ordem do ficheiro.
+function parseSubtitleText(text as string) as object
+    entries = []
+    if not isStringValue(text) then return entries
+    lines = text.Split(Chr(10))
+    total = lines.Count()
+    index = 0
+    while index < total
+        line = lines[index].Trim()
+        times = invalid
+        if Instr(1, line, "-->") > 0 then times = parseSubtitleTimes(line)
+        if times = invalid then
+            index = index + 1
+        else
+            index = index + 1
+            parts = []
+            while index < total
+                body = lines[index].Trim()
+                if body = "" or Instr(1, body, "-->") > 0 then
+                    exit while
+                end if
+                parts.Push(cleanSubtitleText(body))
+                index = index + 1
+            end while
+            body = ""
+            for each part in parts
+                if part <> "" then
+                    if body <> "" then body = body + Chr(10)
+                    body = body + part
+                end if
+            end for
+            if body <> "" and times.stop > times.start then
+                entries.Push({ start: times.start, stop: times.stop, text: body })
+            end if
+        end if
+    end while
+    return entries
+end function
+
+' "00:01:02,500 --> 00:01:05,000" ou "01:02.500 --> 01:05.000 line:90%".
+function parseSubtitleTimes(line as string) as object
+    arrow = Instr(1, line, "-->")
+    if arrow <= 1 then return invalid
+    left = Left(line, arrow - 1).Trim()
+    right = Mid(line, arrow + 3, Len(line) - arrow - 2).Trim()
+    ' No WebVTT podem vir definições de posição depois do tempo final.
+    space = Instr(1, right, " ")
+    if space > 0 then right = Left(right, space - 1)
+    startTime = parseSubtitleTimestamp(left)
+    stopTime = parseSubtitleTimestamp(right)
+    if startTime < 0 or stopTime < 0 then return invalid
+    return { start: startTime, stop: stopTime }
+end function
+
+' "hh:mm:ss,mmm", "hh:mm:ss.mmm" ou "mm:ss.mmm" -> segundos.
+function parseSubtitleTimestamp(value as string) as float
+    text = value.Trim().Replace(",", ".")
+    if text = "" then return -1
+    segments = text.Split(":")
+    count = segments.Count()
+    if count = 2 then
+        hours = 0
+        minutes = Val(segments[0])
+        seconds = Val(segments[1])
+    else if count >= 3 then
+        hours = Val(segments[0])
+        minutes = Val(segments[1])
+        seconds = Val(segments[2])
+    else
+        return -1
+    end if
+    if hours < 0 or minutes < 0 or seconds < 0 then return -1
+    return hours * 3600 + minutes * 60 + seconds
+end function
+
+' Tira tags de estilo (<i>, <b>, <font ...>) e marcadores ASS ({\an8}).
+function cleanSubtitleText(line as string) as string
+    text = line
+    while Instr(1, text, "<") > 0 and Instr(1, text, ">") > 0
+        tagOpen = Instr(1, text, "<")
+        tagClose = Instr(1, text, ">")
+        if tagClose < tagOpen then exit while
+        text = Left(text, tagOpen - 1) + Mid(text, tagClose + 1, Len(text) - tagClose)
+    end while
+    while Instr(1, text, "{") > 0 and Instr(1, text, "}") > 0
+        markOpen = Instr(1, text, "{")
+        markClose = Instr(1, text, "}")
+        if markClose < markOpen then exit while
+        text = Left(text, markOpen - 1) + Mid(text, markClose + 1, Len(text) - markClose)
+    end while
+    text = text.Replace("&amp;", "&").Replace("&lt;", "<").Replace("&gt;", ">")
+    text = text.Replace("&quot;", Chr(34)).Replace("&#39;", "'").Replace("&nbsp;", " ")
+    return text.Trim()
+end function
+
+' Cue que está a passar em `position`. `hint` é o índice da última cue
+' mostrada: a reprodução avança, por isso recuar e avançar a partir dele
+' evita percorrer a lista toda a cada notificação de posição.
+function subtitleTextAt(entries as object, position as float, hint as integer) as object
+    result = { text: "", index: hint }
+    if type(entries) <> "roArray" or entries.Count() = 0 then return result
+    if position <= 0 then return result
+    last = entries.Count() - 1
+    index = hint
+    if index < 0 or index > last then index = 0
+    ' Se o utilizador recuou (seek para trás) a dica está à frente do tempo.
+    while index > 0 and entries[index].start > position
+        index = index - 1
+    end while
+    while index <= last and entries[index].start <= position
+        if position < entries[index].stop then
+            result.text = entries[index].text
+            result.index = index
+            return result
+        end if
+        index = index + 1
+    end while
+    if index > last then index = last
+    result.index = index
+    return result
+end function
+
+' O formato não muda o parser, mas o nome do ficheiro ajuda na mensagem.
+function subtitleFormatFromUrl(url as string) as string
+    low = LCase(url.Trim())
+    if Right(low, 4) = ".vtt" then return "WebVTT"
+    return "SRT"
+end function
