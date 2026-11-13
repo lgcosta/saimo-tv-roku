@@ -6,7 +6,7 @@ o versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
 
 ## [Não publicado]
 
-## [2.5.43] — 2026-11-13
+## [2.5.44] — 2026-11-13
 
 ### Adicionado
 - **Preview do canal em foco**: ao abrir a app, o primeiro canal da grelhe
@@ -92,7 +92,5 @@ o versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
   (filmes, séries e episódios), favoritos, busca, guia de TV, ajustes e
   sincronização automática.
 
-[2.5.43]: https://github.com/lgcosta/saimo-tv-roku/releases/tag/v2.5.43
+[2.5.44]: https://github.com/lgcosta/saimo-tv-roku/releases/tag/v2.5.44
 [2.5.37]: https://github.com/lgcosta/saimo-tv-roku/releases/tag/v2.5.37
-[2.5.19]: https://github.com/lgcosta/saimo-tv-roku/releases/tag/v2.5.19
-[2.5.0]: https://github.com/lgcosta/saimo-tv-roku/releases/tag/v2.5.0
