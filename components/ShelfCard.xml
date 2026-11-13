@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="ShelfCard" extends="Group">
+    <interface>
+        <field id="itemContent" type="node" onChange="showItem" />
+        <field id="focusPercent" type="float" onChange="updateFocus" />
+        <field id="itemHasFocus" type="boolean" onChange="updateFocus" />
+    </interface>
+
+    <script type="text/brightscript" uri="pkg:/source/bslib.brs" />
+    <script type="text/brightscript" uri="pkg:/components/ShelfCard.brs" />
+
+    <children>
+        <Label visible="false">
+            <Font id="shelfCardFont" role="font" uri="pkg:/fonts/Roboto-Medium.ttf" size="16" />
+        </Label>
+        <Poster id="poster" translation="[3, 3]" width="107" height="153"
+                loadDisplayMode="scaleToFit"
+                loadingBitmapUri="pkg:/images/placeholder.png"
+                failedBitmapUri="pkg:/images/placeholder.png" />
+        <Poster id="focusHalo" translation="[1, 1]" width="112" height="159"
+                uri="pkg:/images/focus_shelf.png" opacity="0" loadSync="true" />
+        <Label id="cardTitle" translation="[3, 157]" width="107" height="39"
+               font="dictionary:shelfCardFont" color="0xF7F3FFFF" wrap="true" maxLines="2" />
+    </children>
+</component>

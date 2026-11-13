@@ -1,0 +1,18 @@
+# Pacotes gerados
+*.zip
+*.apk
+dist/
+out/
+*.pkg
+
+# Ferramentas locais (fora do pacote Roku)
+tools/
+roku-tools/
+
+# Sistema
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/

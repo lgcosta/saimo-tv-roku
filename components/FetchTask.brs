@@ -1,0 +1,415 @@
+sub init()
+    m.top.functionName = "runTask"
+end sub
+
+sub runTask()
+    mode = LCase(m.top.mode.Trim())
+    if mode = "playlist" then
+        loadPlaylist()
+    else if mode = "m3upt" then
+        loadM3upt()
+    else if mode = "vod_catalog" then
+        loadVodCatalog()
+    else if mode = "saimo_index" then
+        loadSaimoIndex()
+    else if mode = "saimo_letter" then
+        loadSaimoLetter()
+    else if mode = "saimo_episodes" then
+        loadSaimoEpisodes()
+    else if mode = "saimo_search" then
+        loadSaimoSearch()
+    else
+        m.top.error = "Modo de tarefa desconhecido."
+    end if
+end sub
+
+sub loadPlaylist()
+    url = m.top.url.Trim()
+    if url = "" then
+        m.top.error = "Nenhuma lista configurada."
+        return
+    end if
+
+    response = httpGet(url, m.top.userAgent, "")
+    if (not response.ok or looksLikeHtml(response.body)) and isSaimoCatalogUrl(url) then
+        ' A fonte publica e a unica endereco que responde hoje; o espelho no
+        ' GitHub foi removido e devolvia 404, o que so exibia um erro.
+        response = httpGet("https://saimo-canais.pages.dev/catalogo.txt", m.top.userAgent, "")
+    end if
+    if not response.ok then
+        m.top.error = "Nao foi possivel baixar a lista: " + response.error
+        return
+    end if
+    if looksLikeHtml(response.body) then
+        m.top.error = "O endereco retornou HTML, nao uma lista. Confira a URL em Ajustes."
+        return
+    end if
+
+    channels = parsePlaylist(response.body)
+    if channels.Count() = 0 then
+        m.top.error = "A lista foi baixada, mas nenhum canal foi reconhecido."
+        return
+    end if
+
+    m.top.resultJson = FormatJson(channels)
+    m.top.count = channels.Count()
+    m.top.success = true
+end sub
+
+' Lista publica do M3UPT: canais de TV, radios e beachcams portugueses.
+' Entra no app como categoria fixa, ao lado da lista principal.
+sub loadM3upt()
+    response = httpGet(m3uptPlaylistUrl(), m.top.userAgent, "")
+    if not response.ok or looksLikeHtml(response.body) then
+        ' O endereco do site redireciona duas vezes; se o aparelho nao seguir
+        ' os redirecionamentos, o endereco direto entrega o mesmo ficheiro.
+        response = httpGet(m3uptPlaylistFallbackUrl(), m.top.userAgent, "")
+    end if
+    if not response.ok then
+        m.top.error = "Nao foi possivel baixar a lista de Portugal: " + response.error
+        return
+    end if
+    if looksLikeHtml(response.body) then
+        m.top.error = "O endereco da lista de Portugal retornou HTML, nao M3U."
+        return
+    end if
+
+    channels = parseM3upt(response.body, m.top.userAgent)
+    if channels.Count() = 0 then
+        m.top.error = "A lista de Portugal foi baixada, mas nenhum canal foi reconhecido."
+        return
+    end if
+
+    m.top.resultJson = FormatJson(channels)
+    m.top.count = channels.Count()
+    m.top.success = true
+end sub
+
+' A fonte Saimo e um catalogo por fragmentos. O indice e pequeno; o app busca
+' titulos por letra e episodios somente quando o usuario abre uma serie.
+sub loadSaimoIndex()
+    base = normalizeSaimoBase(m.top.baseUrl)
+    if base = "" then
+        m.top.error = "Fonte do catalogo invalida."
+        return
+    end if
+
+    response = httpGet(base + "indice.txt", m.top.userAgent, "")
+    if not response.ok or looksLikeHtml(response.body) then
+        message = response.error
+        if message = "" then message = "O indice VOD nao retornou texto valido."
+        m.top.error = "Nao foi possivel atualizar o indice VOD: " + message
+        return
+    end if
+
+    bases = parseBases(response.body)
+    letters = parseSaimoIndexLetters(response.body)
+    if letters.Count() = 0 then
+        m.top.error = "O indice VOD foi baixado, mas nao contem letras validas."
+        return
+    end if
+
+    WriteAsciiFile("cachefs:/saimo_vod_bases.json", FormatJson(bases))
+    WriteAsciiFile("cachefs:/saimo_vod_bases.url", base)
+
+    ' Destaques e capas saem de um arquivo pequeno; o catalogo completo de capas
+    ' e baixado em tarefa separada para nao bloquear a primeira tela.
+    covers = {}
+    featured = []
+    shelves = []
+    featuredSeen = {}
+    highlights = httpGet(base + "destaques.txt", m.top.userAgent, "")
+    if highlights.ok and not looksLikeHtml(highlights.body) then
+        shelves = parseHighlights(highlights.body)
+        ' Consolida varias fileiras para manter filmes e series disponiveis no destaque.
+        for each shelf in shelves
+            for each feature in shelf.items
+                prefix = "f:"
+                if strField(feature, "type") = "series" then prefix = "s:"
+                featureKey = prefix + saimoArtworkTitleKey(feature.title)
+                if feature.cover <> "" then covers[featureKey] = feature.cover
+                if featured.Count() < 60 and featuredSeen[featureKey] = invalid then
+                    featuredSeen[featureKey] = true
+                    featured.Push(feature)
+                end if
+            end for
+        end for
+    end if
+
+    signature = saimoIndexSignature(letters, bases)
+    WriteAsciiFile("cachefs:/saimo_vod_covers.json", FormatJson(covers))
+    WriteAsciiFile("cachefs:/saimo_vod_covers.url", base)
+    result = {
+        letters: letters
+        bases: bases
+        covers: covers
+        highlights: featured
+        shelves: shelves
+        baseUrl: base
+        signature: signature
+    }
+    m.top.resultJson = FormatJson(result)
+    m.top.count = letters.Count()
+    m.top.success = true
+end sub
+
+function loadCachedSaimoBases(base as string) as object
+    bases = {}
+    marker = readCacheAscii("cachefs:/saimo_vod_bases.url")
+    raw = readCacheAscii("cachefs:/saimo_vod_bases.json")
+    if isStringValue(marker) and marker.Trim() = base and isStringValue(raw) and raw <> "" then
+        parsed = ParseJson(raw)
+        if type(parsed) = "roAssociativeArray" then return parsed
+    end if
+
+    response = httpGet(base + "indice.txt", m.top.userAgent, "")
+    if response.ok and not looksLikeHtml(response.body) then
+        bases = parseBases(response.body)
+        if bases.Count() > 0 then
+            WriteAsciiFile("cachefs:/saimo_vod_bases.json", FormatJson(bases))
+            WriteAsciiFile("cachefs:/saimo_vod_bases.url", base)
+        end if
+    end if
+    return bases
+end function
+
+sub loadSaimoLetter()
+    t0 = tickSeconds()
+    base = normalizeSaimoBase(m.top.baseUrl)
+    letter = m.top.letter.Trim()
+    filter = LCase(m.top.title.Trim())
+    if filter <> "movies" and filter <> "series" then filter = "all"
+    if letter = "" then
+        m.top.error = "Nenhuma letra selecionada."
+        return
+    end if
+    if base = "" then
+        m.top.error = "Fonte do catalogo invalida."
+        return
+    end if
+
+    bases = loadCachedSaimoBases(base)
+    if bases.Count() = 0 then
+        m.top.error = "Nao foi possivel carregar as bases de video do catalogo."
+        return
+    end if
+
+    fileLetter = letter
+    if letter = "#" then fileLetter = "%23"
+    items = []
+    loadedAny = false
+    errors = []
+
+    if filter = "movies" or filter = "all" then
+        movieResponse = httpGet(base + "filmes-" + fileLetter + ".txt", m.top.userAgent, "")
+        if movieResponse.ok and not looksLikeHtml(movieResponse.body) then
+            loadedAny = true
+            movieItems = parseSaimoMovieItems(movieResponse.body, letter, bases)
+            for each item in movieItems
+                items.Push(item)
+            end for
+        else
+            errors.Push("filmes")
+        end if
+    end if
+
+    if filter = "series" or filter = "all" then
+        seriesResponse = httpGet(base + "series-" + fileLetter + ".txt", m.top.userAgent, "")
+        if seriesResponse.ok and not looksLikeHtml(seriesResponse.body) then
+            loadedAny = true
+            seriesItems = parseSaimoSeriesItems(seriesResponse.body, letter)
+            for each item in seriesItems
+                items.Push(item)
+            end for
+        else
+            errors.Push("series")
+        end if
+    end if
+
+    if not loadedAny then
+        m.top.error = "Nao foi possivel carregar os titulos desta letra. Verifique a conexao e tente novamente."
+        return
+    end if
+
+    stamp = tickSeconds()
+    items = sortSaimoItems(items)
+
+    ' As capas e os generos sao aplicados dentro da tarefa: fichas.txt tem
+    ' cerca de 4 MB e nunca deve ser lido na linha principal da interface.
+    fallbackCovers = {}
+    coverMarker = readCacheAscii("cachefs:/saimo_vod_covers.url")
+    coverRaw = readCacheAscii("cachefs:/saimo_vod_covers.json")
+    if isStringValue(coverMarker) and coverMarker.Trim() = base and isStringValue(coverRaw) and coverRaw <> "" then
+        coverParsed = ParseJson(coverRaw)
+        if type(coverParsed) = "roAssociativeArray" then fallbackCovers = coverParsed
+    end if
+
+    stamp = tickSeconds()
+    artMap = loadSaimoArtwork(letter, base)
+    stamp = tickSeconds()
+    applySaimoArtwork(items, artMap, fallbackCovers)
+
+    if items.Count() = 0 then
+        m.top.error = "Nenhum titulo valido foi encontrado nesta letra."
+        return
+    end if
+
+    result = { items: items, filter: filter, letter: letter, baseUrl: base }
+    m.top.resultJson = FormatJson(result)
+    WriteAsciiFile(saimoLetterCachePath(filter, letter), m.top.resultJson)
+    WriteAsciiFile("cachefs:/saimo_vod_letters.url", saimoLetterCacheMarker(base, m.top.signature))
+    m.top.count = items.Count()
+    m.top.success = true
+    if errors.Count() > 0 then m.top.error = "Alguns fragmentos nao responderam; a lista exibida pode estar parcial."
+end sub
+
+' As capas e os generos ficam num indice por letra. O arquivo de fichas tem
+' mais de 4 MB: varrer linha a linha e guardar apenas a letra pedida evita
+' repetir a varredura a cada abertura e mantem a memoria baixa, o que importa
+' em aparelhos com pouca RAM.
+function loadSaimoArtwork(letter as string, base as string) as object
+    artMarker = readCacheAscii("cachefs:/saimo_art.url")
+    if not (isStringValue(artMarker) and artMarker.Trim() = base) then
+        ' A fonte do catalogo mudou: as capas em cache nao valem mais.
+        deleteSaimoArtworkCaches()
+        WriteAsciiFile("cachefs:/saimo_art.url", base)
+    end if
+
+    stamp2 = tickSeconds()
+    artPath = saimoArtworkCachePath(letter)
+    artRaw = readCacheAscii(artPath)
+    if isStringValue(artRaw) and artRaw <> "" then
+        parsed = ParseJson(artRaw)
+        if type(parsed) = "roAssociativeArray" then return parsed
+    end if
+
+    stamp2 = tickSeconds()
+    fichas = ""
+    cachedBase = readCacheAscii("cachefs:/saimo_vod_fichas.url")
+    if isStringValue(cachedBase) and cachedBase.Trim() = base then
+        fichas = readCacheAscii("cachefs:/saimo_vod_fichas.txt")
+    end if
+
+    ' As fichas completas so sao baixadas quando o usuario entra no catalogo.
+    ' A operacao ocorre nesta tarefa em segundo plano, nunca na abertura.
+    if not isStringValue(fichas) or fichas = "" then
+        response = httpGet(base + "fichas.txt", m.top.userAgent, "")
+        if response.ok and not looksLikeHtml(response.body) and response.body <> "" then
+            fichas = response.body
+            WriteAsciiFile("cachefs:/saimo_vod_fichas.txt", fichas)
+            WriteAsciiFile("cachefs:/saimo_vod_fichas.url", base)
+        end if
+    end if
+    if not isStringValue(fichas) then fichas = ""
+
+    stamp2 = tickSeconds()
+    artMap = saimoArtworkScan(fichas, letter)
+    if artMap.Count() > 0 then WriteAsciiFile(artPath, FormatJson(artMap))
+    return artMap
+end function
+
+sub loadSaimoEpisodes()
+    base = normalizeSaimoBase(m.top.baseUrl)
+    response = httpGet(m.top.url.Trim(), m.top.userAgent, "")
+    if not response.ok or looksLikeHtml(response.body) then
+        message = response.error
+        if message = "" then message = "Resposta invalida do servidor."
+        m.top.error = "Nao foi possivel carregar os episodios desta serie: " + message
+        return
+    end if
+
+    bases = loadCachedSaimoBases(base)
+    if bases.Count() = 0 then
+        m.top.error = "As bases de video nao estao disponiveis. Atualize o catalogo e tente novamente."
+        return
+    end if
+
+    items = parseSaimoEpisodeItems(response.body, m.top.title.Trim(), bases)
+    if items.Count() = 0 then
+        m.top.error = "Nenhum episodio com fonte valida foi encontrado para esta serie."
+        return
+    end if
+
+    m.top.resultJson = FormatJson(items)
+    m.top.count = items.Count()
+    ' O cachefs vive na RAM do aparelho. O JSON de uma letra ocupa ate 2 MB,
+    ' por isso so se guarda o da letra aberta; as capas por letra sao
+    ' pequenas e ficam todas, para nao repetir a varredura do ficheiro.
+    for each other in ["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z","#"]
+        if other <> m.top.letter.Trim() then
+            DeleteFile(saimoLetterCachePath("all", other))
+            DeleteFile(saimoLetterCachePath("movies", other))
+            DeleteFile(saimoLetterCachePath("series", other))
+        end if
+    end for
+    m.top.success = true
+end sub
+
+sub loadSaimoSearch()
+    base = normalizeSaimoBase(m.top.baseUrl)
+    query = m.top.title.Trim()
+    if query = "" then
+        m.top.error = "Digite um termo para pesquisar."
+        return
+    end if
+
+    raw = readCacheAscii("cachefs:/saimo_vod_search.txt")
+    cachedBase = readCacheAscii("cachefs:/saimo_vod_search.url")
+    if not isStringValue(cachedBase) or cachedBase.Trim() <> base or not isStringValue(raw) or raw = "" then
+        response = httpGet(base + "busca.txt", m.top.userAgent, "")
+        if not response.ok or looksLikeHtml(response.body) then
+            m.top.error = "Nao foi possivel pesquisar o catalogo completo. Tente novamente quando a conexao estiver disponivel."
+            return
+        end if
+        raw = response.body
+        WriteAsciiFile("cachefs:/saimo_vod_search.txt", raw)
+        WriteAsciiFile("cachefs:/saimo_vod_search.url", base)
+    end if
+
+    results = parseSaimoSearchItems(raw, query, 160)
+    m.top.resultJson = FormatJson(results)
+    m.top.count = results.Count()
+    m.top.success = true
+end sub
+
+sub loadVodCatalog()
+    url = m.top.url.Trim()
+    if url = "" then
+        m.top.error = "Configure uma URL M3U/M3U8 para um catalogo VOD autorizado."
+        return
+    end if
+
+    response = httpGet(url, m.top.userAgent, "")
+    if not response.ok then
+        m.top.error = "Nao foi possivel atualizar o catalogo VOD: " + response.error
+        return
+    end if
+    if looksLikeHtml(response.body) then
+        m.top.error = "A URL do catalogo retornou HTML, nao uma lista M3U."
+        return
+    end if
+
+    parsed = parseVodM3u(response.body, m.top.userAgent)
+    if parsed.error <> "" then
+        m.top.error = parsed.error
+        return
+    end if
+    if type(parsed.items) <> "roArray" or parsed.items.Count() = 0 then
+        m.top.error = "Nenhum filme ou episodio valido foi encontrado."
+        return
+    end if
+
+    m.top.resultJson = FormatJson(parsed.items)
+    m.top.count = parsed.items.Count()
+    m.top.success = true
+end sub
+
+function tickSeconds() as integer
+    dt = CreateObject("roDateTime")
+    dt.Mark()
+    return dt.AsSeconds() * 1000 + dt.GetMilliseconds()
+end function
+
+function elapsedMs(started as integer) as string
+    return Str(tickSeconds() - started).Trim() + " ms"
+end function

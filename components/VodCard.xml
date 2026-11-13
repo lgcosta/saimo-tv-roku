@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="VodCard" extends="Group">
+    <interface>
+        <field id="itemContent" type="node" onChange="showItem" />
+        <field id="focusPercent" type="float" onChange="updateFocus" />
+        <field id="itemHasFocus" type="boolean" onChange="updateFocus" />
+    </interface>
+    <script type="text/brightscript" uri="pkg:/source/bslib.brs" />
+    <script type="text/brightscript" uri="pkg:/components/VodCard.brs" />
+    <children>
+        <Label visible="false"><Font id="vodTitleFont" role="font" uri="pkg:/fonts/Roboto-Medium.ttf" size="16" /></Label>
+        <Label visible="false"><Font id="vodMetaFont" role="font" uri="pkg:/fonts/Roboto-Regular.ttf" size="13" /></Label>
+        <Rectangle id="cardBg" width="140" height="252" color="0x151021FF" />
+        <Poster id="poster" width="140" height="190" loadDisplayMode="scaleToFit"
+                loadingBitmapUri="pkg:/images/placeholder.png"
+                failedBitmapUri="pkg:/images/placeholder.png" />
+        <Label id="title" translation="[2, 190]" width="136" height="39"
+               font="dictionary:vodTitleFont" color="0xF7F3FFFF" wrap="true" maxLines="2" />
+        <Label id="meta" translation="[2, 230]" width="136" height="17"
+               font="dictionary:vodMetaFont" color="0xB8B0CCFF" maxLines="1" />
+        <Poster id="focusHalo" width="140" height="190" uri="pkg:/images/focus_grid.png"
+                opacity="0" loadSync="true" />
+    </children>
+</component>

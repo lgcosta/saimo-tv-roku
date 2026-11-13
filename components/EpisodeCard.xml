@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="EpisodeCard" extends="Group">
+    <interface>
+        <field id="itemContent" type="node" onChange="showItem" />
+        <field id="focusPercent" type="float" onChange="updateFocus" />
+        <field id="itemHasFocus" type="boolean" onChange="updateFocus" />
+    </interface>
+    <script type="text/brightscript" uri="pkg:/source/bslib.brs" />
+    <script type="text/brightscript" uri="pkg:/components/EpisodeCard.brs" />
+    <children>
+        <Label visible="false"><Font id="episodeNumberFont" role="font" uri="pkg:/fonts/Roboto-Medium.ttf" size="52" /></Label>
+        <Label visible="false"><Font id="episodeTitleFont" role="font" uri="pkg:/fonts/Roboto-Medium.ttf" size="23" /></Label>
+        <Label visible="false"><Font id="episodeMetaFont" role="font" uri="pkg:/fonts/Roboto-Regular.ttf" size="16" /></Label>
+        <Label visible="false"><Font id="episodeBadgeFont" role="font" uri="pkg:/fonts/Roboto-Medium.ttf" size="15" /></Label>
+        <Rectangle id="cardBg" width="264" height="207" color="0x0B0E14D9" />
+        <Poster id="poster" translation="[5, 5]" width="253" height="124" loadDisplayMode="scaleToZoom"
+                loadingBitmapUri="pkg:/images/placeholder.png"
+                failedBitmapUri="pkg:/images/placeholder.png" />
+        <Label id="episodeNumber" translation="[5, 5]" width="253" height="124"
+               font="dictionary:episodeNumberFont" color="0x4FE3D0FF"
+               horizAlign="center" vertAlign="center" text="" visible="false" />
+        <Rectangle id="episodeCodeBg" translation="[72, 8]" width="176" height="23" color="0x0B0E14BF" />
+        <Label id="episodeCode" translation="[77, 9]" width="165" height="20"
+               font="dictionary:episodeBadgeFont" color="0x4FE3D0FF" horizAlign="center" text="" />
+        <Label id="title" translation="[8, 131]" width="248" height="29"
+               font="dictionary:episodeTitleFont" color="0xFFFFFFFF" maxLines="1" text="" />
+        <Label id="meta" translation="[8, 160]" width="248" height="19"
+               font="dictionary:episodeMetaFont" color="0xA8B4C0FF" maxLines="1" text="" />
+        <Label id="synopsis" translation="[8, 180]" width="248" height="19"
+               font="dictionary:episodeMetaFont" color="0x66FFFFFF" maxLines="1" text="" />
+        <Poster id="focusHalo" width="264" height="207" uri="pkg:/images/focus_episode.png"
+                opacity="0" loadSync="true" />
+    </children>
+</component>
