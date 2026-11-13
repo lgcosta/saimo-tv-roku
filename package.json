@@ -1,6 +1,6 @@
 {
     "name": "saimo-tv-roku",
-    "version": "2.7.0",
+    "version": "2.9.0",
     "private": true,
     "description": "Cliente pessoal Saimo TV para Roku, em BrighterScript",
     "scripts": {

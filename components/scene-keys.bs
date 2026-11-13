@@ -59,7 +59,11 @@ function onKeyEvent(key as string, press as boolean) as boolean
 
     if m.playerVisible then
         if k = "back" then
-            closePlayer()
+            if m.playerMenu <> invalid and m.playerMenu.visible then
+                closePlayerMenu()
+            else
+                closePlayer()
+            end if
             return true
         else if k = "ok" then
             togglePlayback()
@@ -76,7 +80,14 @@ function onKeyEvent(key as string, press as boolean) as boolean
         else if k = "right" then
             seekBy(30)
             return true
-        else if k = "up" or k = "down" then
+        else if k = "up" then
+            if m.playerMenu <> invalid and m.playerMenu.visible then
+                closePlayerMenu()
+            else
+                openPlayerMenu()
+            end if
+            return true
+        else if k = "down" then
             showPlayerOverlay()
             return true
         end if

@@ -6,6 +6,23 @@ o versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
 
 ## [Não publicado]
 
+## [2.9.0] — 2026-11-13
+
+### Adicionado
+- **Menu das legendas dentro do player.** A tecla **\*** é consumida pela
+  plataforma durante a reprodução — na TV, `k=ok` e `k=back` chegam ao
+  `onKeyEvent` mas `k=info` nunca chega —, pelo que o ajuste das legendas
+  passou a viver no overlay: **↑ abre**, as setas navegam, **OK** aplica e
+  **Back** fecha sem sair do vídeo. São sete pílulas (o `ActionPill` que a
+  ficha já usava) com o valor em uso sempre visível: ligar/desligar, tamanho,
+  tipo de letra, cor, posição, fundo e legendas embutidas. O auto-hide do
+  overlay fica suspenso enquanto o menu está aberto.
+- Os ciclos de estilo passaram a ser funções partilhadas (`cycleSubtitleSize`,
+  `cycleSubtitleFont`, …), usadas tanto pelo menu como por Ajustes, em vez de
+  dois blocos de código paralelos.
+- Mudar o estilo redesenha já a cue em ecrã: com o vídeo pausado não chegam
+  notificações de posição e, sem isto, o texto ficava com o estilo antigo.
+
 ## [2.8.0] — 2026-11-13
 
 ### Adicionado
@@ -22,9 +39,7 @@ o versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
   O ficheiro configura-se em *Ajustes → Legendas: ficheiro SRT/VTT*, aceita
   `http(s)://` ou um caminho `pkg:/`, e é descarregado e interpretado numa
   tarefa de fundo. A sincronização segue a posição do `Video` (a 4 notificações
-  por segundo enquanto há legendas). O liga/desliga fica em Ajustes: a
-  plataforma trata a tecla **\*** enquanto há vídeo a tocar e nunca a entrega à
-  app, pelo que não há atalho durante a reprodução.
+  por segundo enquanto há legendas).
 - **Legendas embutidas do stream** também passaram a ser controláveis em
   *Ajustes*: desligadas, ligadas ou em repetição, via `globalCaptionMode`. O
   aspecto destas continua a ser o do sistema (Definições → Acessibilidade).

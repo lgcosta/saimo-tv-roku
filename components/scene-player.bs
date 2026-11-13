@@ -48,9 +48,9 @@ sub playChannel(channel as object, startIndex as integer)
     m.progressFill.width = 0
     if m.playerHint <> invalid then
         if m.currentIsLive then
-            m.playerHint.text = "AO VIVO  •  OK mostra informações  •  pausa e busca indisponíveis  •  Back sai"
+            m.playerHint.text = "AO VIVO  •  OK informações  •  ↑ legendas  •  pausa e busca indisponíveis  •  Back sai"
         else
-            m.playerHint.text = "OK pausa  •  ‹ -10s  •  › +30s  •  Back sai"
+            m.playerHint.text = "OK pausa  •  ‹ -10s  •  › +30s  •  ↑ legendas  •  Back sai"
         end if
     end if
     m.video.control = "stop"
@@ -193,6 +193,7 @@ end sub
 
 sub hidePlayerOverlay()
     if not m.playerVisible or LCase(m.video.state) <> "playing" then return
+    if m.playerMenu <> invalid and m.playerMenu.visible then return
     m.playerOverlay.visible = false
 end sub
 

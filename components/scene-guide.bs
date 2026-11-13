@@ -140,9 +140,9 @@ sub openAbout()
     m.aboutVisible = true
     m.aboutGroup.visible = true
     m.homeGroup.visible = false
-    text = "Saimo TV 2.8.0 - cliente pessoal não oficial para Roku." + Chr(10) + Chr(10)
+    text = "Saimo TV 2.9.0 - cliente pessoal não oficial para Roku." + Chr(10) + Chr(10)
     text = text + "Este aplicativo não é afiliado à Saimo. Ele lê listas M3U e o catálogo público que você configura. Use somente fontes de conteúdo que você tenha permissão para acessar e distribuir." + Chr(10) + Chr(10)
-    text = text + "Interface 2.8.0: legendas de ficheiro (SRT/VTT) com tipo de letra, tamanho, cor e posição à escolha; a tecla de informação marca o canal em foco como favorito, e os últimos canais sintonizados ficam na categoria Recentes. Você também pode acrescentar as suas próprias listas M3U em Ajustes, cada uma como um grupo próprio." + Chr(10) + Chr(10)
+    text = text + "Interface 2.9.0: legendas de ficheiro (SRT/VTT) com tipo de letra, tamanho, cor e posição à escolha — no player, a seta para cima abre um menu para as ajustar sem sair do vídeo; a tecla de informação marca o canal em foco como favorito, e os últimos canais sintonizados ficam na categoria Recentes. Você também pode acrescentar as suas próprias listas M3U em Ajustes, cada uma como um grupo próprio." + Chr(10) + Chr(10)
     text = text + "Canais de Portugal: a lista pública do M3UPT (https://m3upt.com/iptv) entra como categoria fixa, ao lado da lista que você configura. Traz TV, rádios e beachcams portugueses, com os cabeçalhos HTTP que cada emissor exige. Canais com DRM ClearKey e conteúdo sob demanda ficam de fora, porque o Roku não os reproduz." + Chr(10) + Chr(10)
     text = text + "O EPG do M3UPT (https://m3upt.com/epg) vem comprimido em gzip e o Roku não sabe descomprimir, por isso o guia fica vazio até você indicar um XMLTV em texto puro em Ajustes." + Chr(10) + Chr(10)
     text = text + "Listas M3U externas: em Ajustes, “Adicionar lista M3U” guarda o endereço e mostra a lista como mais um grupo na grelha, ao lado da sua lista principal e dos Canais de Portugal. Se uma lista deixar de responder, o grupo desaparece em vez de ficar a mostrar canais velhos." + Chr(10) + Chr(10)

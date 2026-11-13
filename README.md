@@ -16,7 +16,8 @@ portuguesa do [M3UPT](https://github.com/LITUATUI/M3UPT) como categoria fixa.
 - **Favoritos e recentes** — a tecla de informação marca o canal em foco e os
   últimos sintonizados ficam numa categoria própria.
 - **Legendas com estilo** — ficheiros SRT/WebVTT desenhados pela app, com tipo
-  de letra, tamanho, cor, posição e fundo à escolha. As legendas embutidas no
+  de letra, tamanho, cor, posição e fundo à escolha; no player, **↑** abre um
+  menu para ajustar tudo sem sair do vídeo. As legendas embutidas no
   stream usam o estilo do sistema, que a app só liga, desliga ou põe em
   repetição.
 - **Favoritos, Busca, Guia de TV e Ajustes** — lista M3U configurável, EPG

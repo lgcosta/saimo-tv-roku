@@ -102,6 +102,137 @@ function subtitleAnchorY() as integer
     return positions[index].y
 end function
 
+' ---------------------------------------------------------------------------
+' Ciclos de estilo, partilhados pelo menu do player e por Ajustes
+' ---------------------------------------------------------------------------
+
+sub cycleSubtitleSize()
+    m.subsSizeIndex = (m.subsSizeIndex + 1) mod subtitleSizes().Count()
+    writeSetting("subsSize", Str(m.subsSizeIndex).Trim())
+    applySubtitleStyle()
+    showToastType("Tamanho: " + subtitleSizeName(), "success")
+end sub
+
+sub cycleSubtitleFont()
+    m.subsFontIndex = (m.subsFontIndex + 1) mod subtitleFonts().Count()
+    writeSetting("subsFont", Str(m.subsFontIndex).Trim())
+    applySubtitleStyle()
+    showToastType("Letra: " + subtitleFontName(), "success")
+end sub
+
+sub cycleSubtitleColor()
+    m.subsColorIndex = (m.subsColorIndex + 1) mod subtitleColors().Count()
+    writeSetting("subsColor", Str(m.subsColorIndex).Trim())
+    applySubtitleStyle()
+    showToastType("Cor: " + subtitleColorName(), "success")
+end sub
+
+sub cycleSubtitlePosition()
+    m.subsPosIndex = (m.subsPosIndex + 1) mod subtitlePositions().Count()
+    writeSetting("subsPos", Str(m.subsPosIndex).Trim())
+    applySubtitleStyle()
+    showToastType("Posição: " + subtitlePositionName(), "success")
+end sub
+
+sub toggleSubtitleBackground()
+    m.subsBgEnabled = not m.subsBgEnabled
+    writeSetting("subsBg", "0")
+    if m.subsBgEnabled then writeSetting("subsBg", "1")
+    applySubtitleStyle()
+    showToastType("Fundo: " + yesNoText(m.subsBgEnabled), "success")
+end sub
+
+sub cycleCaptionMode()
+    m.captionModeIndex = (m.captionModeIndex + 1) mod captionModes().Count()
+    writeSetting("captionMode", Str(m.captionModeIndex).Trim())
+    applyCaptionMode()
+    showToastType("Embutidas: " + captionModeName(), "success")
+end sub
+
+' ---------------------------------------------------------------------------
+' Menu do player
+'
+' A plataforma trata a tecla * durante a reprodução e nunca a entrega ao
+' onKeyEvent, por isso o controlo das legendas vive num menu: seta para cima
+' abre, setas navegam, OK aplica, Back fecha.
+' ---------------------------------------------------------------------------
+
+function playerMenuItemTitles() as object
+    titles = []
+    if m.subsEnabled then
+        titles.Push("Legendas: Ligadas")
+    else
+        titles.Push("Legendas: Desligadas")
+    end if
+    titles.Push("Tamanho: " + subtitleSizeName())
+    titles.Push("Letra: " + subtitleFontName())
+    titles.Push("Cor: " + subtitleColorName())
+    titles.Push("Posição: " + subtitlePositionName())
+    titles.Push("Fundo: " + yesNoText(m.subsBgEnabled))
+    titles.Push("Embutidas: " + captionModeName())
+    return titles
+end function
+
+sub buildPlayerMenu()
+    if m.playerMenu = invalid then return
+    root = CreateObject("roSGNode", "ContentNode")
+    for each title in playerMenuItemTitles()
+        item = root.CreateChild("ContentNode")
+        item.title = title
+    end for
+    m.playerMenu.content = root
+end sub
+
+sub openPlayerMenu()
+    if m.playerMenu = invalid or not m.playerVisible then return
+    buildPlayerMenu()
+    m.playerMenu.jumpToItem = 0
+    m.playerMenu.visible = true
+    m.playerOverlay.visible = true
+    m.playerAutoHideTimer.control = "stop"
+    m.playerMenu.setFocus(true)
+    print "SAIMO_MENU aberto"
+end sub
+
+sub closePlayerMenu()
+    if m.playerMenu = invalid or not m.playerMenu.visible then return
+    m.playerMenu.visible = false
+    m.top.setFocus(true)
+    if m.playerVisible then
+        m.playerOverlay.visible = true
+        m.playerAutoHideTimer.control = "stop"
+        m.playerAutoHideTimer.control = "start"
+    end if
+    print "SAIMO_MENU fechado"
+end sub
+
+sub onPlayerMenuSelected()
+    if m.playerMenu = invalid or not m.playerMenu.visible then return
+    index = m.playerMenu.itemSelected
+    if index < 0 then return
+    print "SAIMO_MENU escolha=" + Str(index).Trim()
+    if index = 0 then
+        toggleSubtitles()
+    else if index = 1 then
+        cycleSubtitleSize()
+    else if index = 2 then
+        cycleSubtitleFont()
+    else if index = 3 then
+        cycleSubtitleColor()
+    else if index = 4 then
+        cycleSubtitlePosition()
+    else if index = 5 then
+        toggleSubtitleBackground()
+    else if index = 6 then
+        cycleCaptionMode()
+    else
+        return
+    end if
+    ' Reconstroi as etiquetas com o valor novo e devolve o foco à mesma pílula.
+    buildPlayerMenu()
+    if index < m.playerMenu.content.Count() then m.playerMenu.jumpToItem = index
+end sub
+
 sub initSubtitleState()
     m.subsEnabled = readSetting("subsEnabled") = "1"
     m.subsUrl = readSetting("subsUrl")
@@ -134,8 +265,11 @@ sub applySubtitleStyle()
     m.subsText.color = colors[colorIndex].value
     if m.subsBg <> invalid then m.subsBg.visible = m.subsBgEnabled
     print "SAIMO_SUBS estilo fonte=" + fonts[fontIndex].name + " tamanho=" + Str(subtitleFontSize()).Trim() + " cor=" + colors[colorIndex].name + " posicao=" + subtitlePositionName() + " fundo=" + yesNoText(m.subsBgEnabled)
-    ' força a próxima cue a ser redesenhada com o estilo novo
+    ' Redesenha já a cue em ecrã: com o vídeo pausado não chegam notificações
+    ' de posição, e sem isto o texto ficava com o estilo antigo.
+    previous = m.subsLastText
     m.subsLastText = ""
+    if previous <> "" then showSubtitleLine(previous)
 end sub
 
 sub applyCaptionMode()

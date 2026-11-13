@@ -274,6 +274,14 @@
             <BusySpinner id="playerSpinner" translation="[608, 301]"
                          uri="pkg:/images/player_spinner.png" spinInterval="1.2" control="stop"
                          visible="false" />
+            <!-- Menu do player: pílulas com o estado das legendas. Abre com
+                 a seta para cima e fecha com Back; OK aplica. -->
+            <MarkupGrid id="playerMenu" translation="[64, 150]"
+                        itemComponentName="ActionPill" itemSize="[197, 69]"
+                        itemSpacing="[16, 8]" numColumns="4" numRows="2"
+                        horizFocusAnimationStyle="floatingFocus" vertFocusAnimationStyle="floatingFocus"
+                        drawFocusFeedback="false" visible="false" />
+
             <Label id="playerCenterState" translation="[547, 300]" width="187" height="67"
                    font="dictionary:fontDisplay" color="0xF7F3FFFF" horizAlign="center"
                    vertAlign="center" text="‣" visible="false" />
